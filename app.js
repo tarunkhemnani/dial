@@ -1,5 +1,8 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Modified: typing delay set to 5000ms; added console.debug logging and robust delay helper.
+// Behavior: invisible paste button reads clipboard and types with:
+//   1) initial delay = 5000ms before first char
+//   2) inter-character delay = 1000ms between subsequent chars
+// Abort by pressing the paste button again while typing.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -216,7 +219,7 @@
   }
 
   /* ---------- Helper: briefly highlight a key visually ---------- */
-  const FLASH_MS = 600; // long enough so the 300ms fade is visible
+  const FLASH_MS = 360; // >= 300ms so fade is visible
   function flashKey(value, ms = FLASH_MS) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
@@ -303,22 +306,32 @@
   let typingInProgress = false;
   let typingAbort = false;
 
-  // **User request:** 5000 ms (5 seconds)
-  const TYPING_DELAY_MS = 5000;
+  // Requested timing:
+  const FIRST_DELAY_MS = 5000;    // 5s before the FIRST character
+  const INTER_DELAY_MS  = 1000;   // 1s between subsequent characters
 
   // small helper delay that returns a promise
   function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // chunked wait so we can detect typingAbort promptly during waits
+  async function waitUntil(ms) {
+    const CHUNK = 100;
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (typingAbort) break;
+      await delay(CHUNK);
+    }
+  }
+
   async function runClipboardTypeSequence() {
     if (typingInProgress) {
-      console.debug('Typing already in progress — setting abort flag.');
+      // toggle abort on second press
       typingAbort = true;
       return;
     }
 
-    // Read clipboard (must be initiated from user gesture)
     let raw = '';
     try {
       raw = await navigator.clipboard.readText();
@@ -330,13 +343,12 @@
 
     raw = (raw || '').trim();
     if (!raw) {
-      console.debug('Clipboard empty or whitespace — aborting.');
+      console.debug('Clipboard empty — aborting.');
       const pb = document.getElementById('pasteBtn');
       if (pb) try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch(e){}
       return;
     }
 
-    // sanitize: allow digits and plus sign
     const toType = raw.replace(/[^\d+]/g, '');
     if (!toType) {
       console.debug('After sanitize nothing to type:', raw);
@@ -349,34 +361,51 @@
     const pasteBtn = document.getElementById('pasteBtn');
     if (pasteBtn) pasteBtn.classList.add('active');
 
-    console.debug('Starting typing sequence:', toType, 'delay between chars (ms):', TYPING_DELAY_MS);
+    console.debug('Will wait', FIRST_DELAY_MS, 'ms before first char, then', INTER_DELAY_MS, 'ms between chars.');
 
-    for (const ch of toType) {
+    // initial delay before first character (abortable)
+    await waitUntil(FIRST_DELAY_MS);
+    if (typingAbort) {
+      console.debug('Typing aborted during initial delay.');
+      typingInProgress = false;
+      typingAbort = false;
+      if (pasteBtn) pasteBtn.classList.remove('active');
+      return;
+    }
+
+    // type first character (if any)
+    const chars = Array.from(toType);
+    if (chars.length === 0) {
+      typingInProgress = false;
+      if (pasteBtn) pasteBtn.classList.remove('active');
+      return;
+    }
+
+    // Type characters: first immediately after FIRST_DELAY_MS, then wait INTER_DELAY_MS between subsequent ones
+    for (let i = 0; i < chars.length; i++) {
       if (typingAbort) {
-        console.debug('Typing aborted by user.');
+        console.debug('Typing aborted before char', i);
         break;
       }
-
-      console.debug('Typing char:', ch);
-      // flash the corresponding key (if it exists)
-      flashKey(ch, FLASH_MS);
-      // append char (visible in the display)
+      const ch = chars[i];
+      console.debug('Typing char', i, ch);
+      flashKey(ch);
       appendChar(ch);
-      // wait the configured delay, but still allow abort during the wait
-      const start = Date.now();
-      while (Date.now() - start < TYPING_DELAY_MS) {
-        if (typingAbort) break;
-        // sleep a small chunk so abort can be detected quickly
-        // and the loop isn't blocking other tasks
-        // eslint-disable-next-line no-await-in-loop
-        await delay(100);
+
+      // if there's a next character, wait inter delay (abortable)
+      if (i < chars.length - 1) {
+        await waitUntil(INTER_DELAY_MS);
+        if (typingAbort) {
+          console.debug('Typing aborted during inter-character delay after char', i);
+          break;
+        }
       }
     }
 
     typingInProgress = false;
     typingAbort = false;
     if (pasteBtn) pasteBtn.classList.remove('active');
-    console.debug('Typing sequence finished/cleaned up.');
+    console.debug('Typing sequence finished.');
   }
 
   function insertInvisiblePasteButtonIntoHashSlot() {
@@ -423,7 +452,6 @@
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         btn.classList.remove('pressed');
-        console.debug('Paste button triggered by keyboard.');
         runClipboardTypeSequence();
       }
     });
@@ -493,7 +521,7 @@
   detectStandalone();
   setupKeys();
 
-  // insert invisible paste button
+  // insert invisible paste button in hash slot
   insertInvisiblePasteButtonIntoHashSlot();
 
   updateDisplay();
