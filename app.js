@@ -415,4 +415,72 @@
     calUI.classList.remove('show');
     calUI.setAttribute('aria-hidden', 'true');
     if (save) saveCalibration();
-    else { loadCalibration
+    else { loadCalibration(); setCalibrationVars(); }
+  }
+  function adjustCalibration(dir) {
+    const step = 2;
+    if (dir === 'up') calibration.y -= step;
+    if (dir === 'down') calibration.y += step;
+    if (dir === 'left') calibration.x -= step;
+    if (dir === 'right') calibration.x += step;
+    setCalibrationVars();
+    calText.textContent = `Calibration: x=${calibration.x}px y=${calibration.y}px — arrow keys to nudge. Enter save, Esc cancel.`;
+  }
+
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'c' || ev.key === 'C') {
+      if (!calibrationMode) enterCalibration(); else exitCalibration(true);
+      return;
+    }
+
+    if (calibrationMode) {
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); adjustCalibration('up'); }
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); adjustCalibration('down'); }
+      if (ev.key === 'ArrowLeft') { ev.preventDefault(); adjustCalibration('left'); }
+      if (ev.key === 'ArrowRight') { ev.preventDefault(); adjustCalibration('right'); }
+      if (ev.key === 'Enter') { ev.preventDefault(); saveCalibration(); exitCalibration(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); exitCalibration(false); }
+      return;
+    }
+
+    if (ev.key >= '0' && ev.key <= '9') appendChar(ev.key);
+    else if (ev.key === '+' || ev.key === '*' || ev.key === '#') appendChar(ev.key);
+    else if (ev.key === 'Backspace') {
+      digits = digits.slice(0, -1);
+      updateDisplay();
+      if (digits.length === 0) { try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){} }
+    }
+  });
+
+  // bottom nav taps (visual only)
+  document.querySelectorAll('.bottom-nav .nav-item').forEach((el, idx) => {
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      el.classList.add('pressed');
+      setTimeout(()=>el.classList.remove('pressed'), 160);
+    });
+  });
+
+  // init
+  loadCalibration();
+  detectStandalone();
+  setupKeys();
+
+  // Insert the invisible "paste/play" button into the hash slot (below 9)
+  insertInvisiblePasteButtonIntoHashSlot();
+
+  updateDisplay();
+
+  document.addEventListener('click', () => { try { document.activeElement.blur(); } catch(e){} });
+
+  // API
+  window.__phoneKeypad = {
+    append: (ch) => { appendChar(ch); },
+    clear: clearDigits,
+    getDigits: () => digits,
+    isStandalone: () => appEl.classList.contains('standalone'),
+    calibration: () => ({...calibration}),
+    runClipboardTypeSequence: runClipboardTypeSequence,
+    cancelTyping: () => { typingAbort = true; }
+  };
+})();
