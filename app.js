@@ -243,7 +243,7 @@
 
     // Inject & sanitize inline svgs for * and #
     injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
-    injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
+    
 
     keysGrid.querySelectorAll('.key').forEach(key => {
       const value = key.dataset.value;
