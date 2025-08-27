@@ -210,7 +210,7 @@ html,body{
   display:block !important;
   vertical-align: middle !important;
   transform-origin: 50% 50% !important;
-  transform: scale(1.60) translateY(1px) !important;
+  transform: scale(1.60) translateY(3px) !important;
   color: currentColor;
 }
 
