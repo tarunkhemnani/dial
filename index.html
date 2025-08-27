@@ -1,35 +1,18 @@
 <!doctype html>
 <html lang="en">
 <head>
- meta charset="utf-8" />
+ <meta charset="utf-8" />
   <title>Phone</title>
-
-  <!-- Web App Manifest (used by Android/Chrome) -->
-  <link rel="manifest" href="/manifest.json">
-
-  <!-- iOS: Home screen title + standalone -->
-  <meta name="apple-mobile-web-app-title" content="Phone">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-
-  <!-- Ensure these icon files exist at these exact paths on your server -->
-  <!-- iOS prefers apple-touch-icon; include both explicit 180 and a root name for compatibility -->
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png">
-  <link rel="apple-touch-icon" href="/apple-touch-icon-180.png">
-
-  <!-- Fallback favicons / icons for other browsers -->
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
-
-  <!-- Theme color -->
   <meta name="theme-color" content="#000000">
-
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 
   <!-- preload replacement background -->
   <link rel="preload" as="image" href="numpad.png">
 
   <link rel="stylesheet" href="styles.css">
+
 </head>
 <body>
   <div class="app lockscreen" id="app" aria-hidden="false">
