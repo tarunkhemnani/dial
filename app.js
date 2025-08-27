@@ -1,6 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Behavior preserved: invisible paste button (clipboard typing), initial 5s then 1s between chars.
-// Delete button now created but invisible by default (still interactive).
+// Behavior preserved: invisible paste button (clipboard typing), initial 10s then 1s between chars.
+// Delete button remains invisible by default (still interactive).
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -304,7 +304,7 @@
   let typingInProgress = false;
   let typingAbort = false;
 
-  const FIRST_DELAY_MS = 5000;    // 5s before FIRST char
+  const FIRST_DELAY_MS = 10000;    // 10s before FIRST char
   const INTER_DELAY_MS  = 1000;   // 1s between subsequent chars
 
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
