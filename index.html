@@ -2,7 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Phone Keypad (Screenshot UI)</title>
+  <title>Phone</title>
+	<!-- Link the manifest (still useful for Android / modern browsers) -->
+<link rel="manifest" href="/manifest.json">
+
+<!-- iOS home-screen title (what appears under the icon) -->
+<meta name="apple-mobile-web-app-title" content="Phone">
+
+<!-- Tell iOS to open the app standalone when launched from Home (optional) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<!-- Apple touch icons — include at least the 180x180 PNG for modern iPhones -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png">
+
+<!-- Useful fallback icons (optional) -->
+<link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png">
+
+<!-- Theme color -->
+<meta name="theme-color" content="#000000">
+
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
