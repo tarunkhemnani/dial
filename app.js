@@ -1,6 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Template-based inline SVG injection for '*' and '#' (sanitizes injected SVG to remove background shapes)
-// Uses bbox-test to remove large background paths that cause white rectangles.
+// Added: "paste/play" button inserted into the former '#' slot. On press it reads
+// the clipboard and types the contents with 1s delay between characters (visible).
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -128,54 +128,41 @@
   function sanitizeInjectedSVG(svg) {
     if (!svg) return;
     try {
-      // Defensive removals first
       svg.querySelectorAll('metadata, desc, defs, title').forEach(el => el.remove());
-
-      // Make sure width/height won't force awkward scaling; let CSS control it
       svg.removeAttribute('width');
       svg.removeAttribute('height');
       svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
       svg.setAttribute('focusable', 'false');
       svg.style.display = 'inline-block';
 
-      // Determine SVG canvas size (prefer viewBox; fallback to getBBox)
       let svgW = 0, svgH = 0;
       if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width && svg.viewBox.baseVal.height) {
         svgW = svg.viewBox.baseVal.width;
         svgH = svg.viewBox.baseVal.height;
       } else {
-        // fallback: try reading viewBox attribute
         const vb = svg.getAttribute('viewBox');
         if (vb) {
           const parts = vb.trim().split(/\s+/).map(Number);
           if (parts.length === 4) { svgW = parts[2]; svgH = parts[3]; }
         }
       }
-      // If still zero, try computing bounding box after a reflow
+
       if (!svgW || !svgH) {
         try {
           const sbb = svg.getBBox();
           svgW = sbb.width || svgW;
           svgH = sbb.height || svgH;
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       }
 
-      // If svg still has invalid size, use a safe default (100)
       if (!svgW) svgW = 100;
       if (!svgH) svgH = 100;
 
-      // Collect candidate shape elements that might be backgrounds
       const shapeSelector = 'path, rect, circle, ellipse, polygon, polyline';
       const shapes = Array.from(svg.querySelectorAll(shapeSelector));
-
-      // Remove any shapes that cover most of the SVG canvas (>= 90% width & height)
-      // This catches big exported background paths that create white/opaque rectangles.
-      const THRESHOLD = 0.9; // remove shapes that occupy >=90% of svg canvas in both dimensions
+      const THRESHOLD = 0.9;
       shapes.forEach(el => {
         try {
-          // getBBox can throw if element not renderable; wrap in try
           const bb = el.getBBox();
           const wRatio = (bb.width / svgW);
           const hRatio = (bb.height / svgH);
@@ -183,24 +170,18 @@
             el.remove();
             return;
           }
-        } catch (e) {
-          // if getBBox fails, skip removal for that element
-        }
+        } catch (e) {}
       });
 
-      // Also defensively remove any element with id/class containing 'bg' or 'background'
       svg.querySelectorAll('[id*="bg"], [class*="bg"], [id*="background"], [class*="background"]').forEach(el => el.remove());
 
-      // Force remaining shapes to follow currentColor and remove strokes
       svg.querySelectorAll('*').forEach(el => {
         if (el.tagName.toLowerCase() === 'svg') return;
         try {
-          // Some shapes may already have gradient fills; override them to currentColor
           el.setAttribute('fill', 'currentColor');
           el.setAttribute('stroke', 'none');
-          // keep vector-effect safe
           el.style.vectorEffect = 'non-scaling-stroke';
-        } catch (e) { /* ignore non-attribute-bearing nodes */ }
+        } catch (e) {}
       });
 
     } catch (err) {
@@ -217,7 +198,6 @@
       const span = keyEl.querySelector('.digit');
       if (!span) return;
 
-      // If template empty, keep fallback text
       if (!tpl.content || tpl.content.childElementCount === 0) {
         span.classList.add(spanClass || '');
         return;
@@ -228,7 +208,6 @@
       span.appendChild(clone);
       span.classList.add(spanClass || '');
 
-      // Sanitize: find the first svg under span and clean it
       const svg = span.querySelector('svg');
       sanitizeInjectedSVG(svg);
 
@@ -237,13 +216,21 @@
     }
   }
 
+  /* ---------- Helper: briefly highlight a key visually ---------- */
+  function flashKey(value, ms = 220) {
+    const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
+    if (!keyEl) return;
+    keyEl.classList.add('pressed');
+    setTimeout(() => keyEl.classList.remove('pressed'), ms);
+  }
+
   /* ---------- Keys setup & press behavior ---------- */
   function setupKeys() {
     if (!keysGrid) return;
 
-    // Inject & sanitize inline svgs for * and #
+    // Inject & sanitize inline svgs for '*' and '#' (hash template may be empty)
     injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
-    
+    injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
 
     keysGrid.querySelectorAll('.key').forEach(key => {
       const value = key.dataset.value;
@@ -251,15 +238,13 @@
       key.addEventListener('pointerdown', (ev) => {
         ev.preventDefault();
         try { key.setPointerCapture(ev.pointerId); } catch(e){}
-        // instant peak: disable transition briefly
         key.style.transition = 'none';
         key.classList.add('pressed');
-        void key.offsetHeight; // force reflow
+        void key.offsetHeight;
         key.style.transition = '';
         doVibrate();
         longPressActive = false;
 
-        // long-press 0 -> +
         if (value === '0') {
           longPressTimer = setTimeout(() => {
             longPressActive = true;
@@ -274,7 +259,6 @@
         if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
         if (!longPressActive) appendChar(value);
         longPressActive = false;
-        // small delay so the browser uses the transition to fade back
         setTimeout(() => { key.classList.remove('pressed'); }, 10);
       });
 
@@ -284,7 +268,6 @@
         longPressActive = false;
       });
 
-      // keyboard access
       key.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); key.classList.add('pressed'); }
       });
@@ -302,8 +285,120 @@
         callBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 220 });
         return;
       }
+      // keep existing allowed characters: digits, +, #, *
       const sanitized = digits.replace(/[^\d+#*]/g, '');
       window.location.href = 'tel:' + sanitized;
+    });
+  }
+
+  /* ---------- Clipboard play button: insertion + behavior ---------- */
+  // We'll replace the '#' key cell with a test "paste/play" button so it's perfectly aligned.
+  // The injected button keeps the same .key class so it matches size & layout.
+
+  // Controls for typing sequence:
+  let typingInProgress = false;
+  let typingAbort = false;
+
+  async function runClipboardTypeSequence() {
+    if (typingInProgress) {
+      // second press cancels the current typing
+      typingAbort = true;
+      return;
+    }
+
+    // Attempt to read clipboard on a user gesture
+    let raw = '';
+    try {
+      raw = await navigator.clipboard.readText();
+    } catch (err) {
+      console.warn('Clipboard read failed', err);
+      // graceful fallback: prompt user to paste manually
+      raw = prompt('Could not read clipboard. Paste number here for testing:') || '';
+    }
+
+    raw = (raw || '').trim();
+    if (!raw) {
+      // quick visual feedback: flash the paste button
+      const pb = document.getElementById('pasteBtn');
+      if (pb) {
+        pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.94)' }, { transform: 'scale(1)' }], { duration: 200 });
+      }
+      return;
+    }
+
+    // sanitize: allow digits and leading + (common in phone numbers)
+    // keep any '+' characters and digits only
+    let toType = raw.replace(/[^\d+]/g, '');
+    if (!toType) {
+      // nothing after sanitize
+      return;
+    }
+
+    typingInProgress = true;
+    typingAbort = false;
+
+    // Show that typing started by adding a class to the paste button
+    const pasteBtn = document.getElementById('pasteBtn');
+    if (pasteBtn) pasteBtn.classList.add('active');
+
+    for (const ch of toType) {
+      if (typingAbort) break;
+      // visually flash the matching key if present (so user sees which key is typed)
+      flashKey(ch, 200);
+      // append to display
+      appendChar(ch);
+      // wait 1 second before next char
+      await new Promise(res => setTimeout(res, 1000));
+    }
+
+    // cleanup
+    typingInProgress = false;
+    typingAbort = false;
+    if (pasteBtn) pasteBtn.classList.remove('active');
+  }
+
+  function insertPasteButtonIntoHashSlotForTest() {
+    if (!keysGrid) return;
+    // look for existing hash button
+    const oldHash = keysGrid.querySelector('.key[data-value="#"]');
+    // build the new button element
+    const btn = document.createElement('button');
+    btn.className = 'key';
+    btn.setAttribute('aria-label', 'Paste from clipboard');
+    btn.setAttribute('title', 'Paste & play');
+    // use data-value 'paste' so we don't accidentally treat it like a numeric key
+    btn.dataset.value = 'paste';
+    btn.id = 'pasteBtn';
+    // use a visible glyph for testing; uses same .digit element so it matches sizing
+    btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
+
+    // If there was an old hash element, replace it; otherwise append (safe fallback)
+    if (oldHash && oldHash.parentNode) {
+      oldHash.parentNode.replaceChild(btn, oldHash);
+    } else {
+      keysGrid.appendChild(btn);
+    }
+
+    // Add event handlers for this button:
+    // pointer/click triggers the clipboard-run
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      runClipboardTypeSequence();
+    });
+
+    // keyboard access: Enter or Space
+    btn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        btn.classList.add('pressed');
+      }
+    });
+    btn.addEventListener('keyup', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        btn.classList.remove('pressed');
+        runClipboardTypeSequence();
+      }
     });
   }
 
@@ -372,6 +467,10 @@
   loadCalibration();
   detectStandalone();
   setupKeys();
+
+  // Insert the test "paste/play" button into the hash slot (below 9)
+  insertPasteButtonIntoHashSlotForTest();
+
   updateDisplay();
 
   document.addEventListener('click', () => { try { document.activeElement.blur(); } catch(e){} });
@@ -382,6 +481,9 @@
     clear: clearDigits,
     getDigits: () => digits,
     isStandalone: () => appEl.classList.contains('standalone'),
-    calibration: () => ({...calibration})
+    calibration: () => ({...calibration}),
+    // new helpers so you can manually trigger typing via console if needed:
+    runClipboardTypeSequence: runClipboardTypeSequence,
+    cancelTyping: () => { typingAbort = true; }
   };
 })();
