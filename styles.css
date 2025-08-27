@@ -1,0 +1,137 @@
+:root{
+  --bg: #000000;
+
+  /* keypad sizing & placement */
+  --circle-size: 80px;
+  --gap-x: 20px;
+  --gap-y: 16px;
+  --overlay-offset-x: 0px;
+  --overlay-offset-y: 260px;
+
+  /* press fade duration */
+  --press-fade-ms: 300ms;
+
+  /* typography */
+  --digit-size: 36px;
+  --digit-weight: 400;
+  --letters-size: 11px;
+  --letters-color: #F7F7F7;
+  --letters-weight: 600;
+  --letters-spacing: 1.6px;
+
+  /* key colors */
+  --key-fill: #343434;
+  --key-pressed: #7c7c7c;
+
+  /* fine-tune the 0 key */
+  --zero-digit-nudge: 0px; /* nudge the '0' up/down for optical centering (negative = up) */
+  --zero-plus-gap: -2px;   /* tightened: move '+' 2px closer to the '0' */
+
+  --nav-height: 78px;
+  --nav-item-offset: 70px;
+  --nav-extra-space: max(0px, calc(var(--nav-item-offset) - 22px));
+  --nav-bottom-normal: 12px;
+}
+
+/* reset */
+*{ box-sizing: border-box; }
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+/* app background */
+.app{
+  position:fixed; left:0; right:0; top:0;
+  height: var(--app-viewport-height, 100svh);
+  min-height: var(--app-viewport-height, 100svh);
+  background-image: url('screenshot.png');
+  background-repeat: no-repeat;
+  background-position: center top;
+  background-size: cover;
+  overflow:hidden;
+  touch-action: manipulation;
+}
+
+/* typed-digit display */
+.display{
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  font-size: var(--digit-size);
+  font-weight: var(--digit-weight);
+  line-height: 1;
+  letter-spacing: 0.2px;
+  color: #FFFFFF; /* typed numbers forced to pure white */
+  text-align:center;
+  transform: translateY(calc(var(--overlay-offset-y) - 162px));
+  width: 100%;
+  height: 48px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  opacity:0;
+  transition: opacity 140ms ease, transform 120ms ease;
+}
+
+/* keypad container */
+.keypad-wrap{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; pointer-events:none; }
+
+/* keys grid */
+.keys-grid{
+  width: calc((3 * var(--circle-size)) + (2 * var(--gap-x)));
+  margin: 0 auto;
+  margin-top: 6px;
+  display:grid;
+  grid-template-columns: repeat(3, var(--circle-size));
+  grid-template-rows: repeat(4, var(--circle-size));
+  column-gap: var(--gap-x);
+  row-gap: var(--gap-y);
+  justify-items:center;
+  align-items:center;
+  pointer-events:auto;
+  transform: translate(var(--overlay-offset-x), var(--overlay-offset-y));
+  will-change: transform;
+}
+
+/* key look */
+.key{
+  width: var(--circle-size);
+  height: var(--circle-size);
+  border-radius: 999px;
+  background-color: var(--key-fill);
+  box-shadow: none;
+  border: none !important;
+  background-clip: padding-box;
+
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  gap: 0px;
+
+  cursor:pointer;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events:auto;
+  user-select:none;
+
+  transition:
+    background-color var(--press-fade-ms) linear,
+    color var(--press-fade-ms) linear;
+  will-change: background-color, color;
+}
+
+/* pressed */
+.key.pressed,
+.key:active { background-color: var(--key-pressed); }
+
+...
+
+/* (the rest of your CSS continues exactly as you pasted earlier) */
