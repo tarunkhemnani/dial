@@ -1,7 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Template-based inline SVG injection for '*' and '#'.
-// IMPORTANT: we preserve the asterisk template verbatim (no sanitization).
-// Hash template is sanitized (bbox-based removal) to strip large background shapes.
+// Template-based inline SVG injection for '*' and '#' (sanitizes injected SVG to remove background shapes)
+// Uses bbox-test to remove large background paths that cause white rectangles.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -145,25 +144,19 @@
         svgW = svg.viewBox.baseVal.width;
         svgH = svg.viewBox.baseVal.height;
       } else {
-        // fallback: try reading viewBox attribute
         const vb = svg.getAttribute('viewBox');
         if (vb) {
           const parts = vb.trim().split(/\s+/).map(Number);
           if (parts.length === 4) { svgW = parts[2]; svgH = parts[3]; }
         }
       }
-      // If still zero, try computing bounding box after a reflow
       if (!svgW || !svgH) {
         try {
           const sbb = svg.getBBox();
           svgW = sbb.width || svgW;
           svgH = sbb.height || svgH;
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       }
-
-      // If svg still has invalid size, use a safe default (100)
       if (!svgW) svgW = 100;
       if (!svgH) svgH = 100;
 
@@ -172,11 +165,9 @@
       const shapes = Array.from(svg.querySelectorAll(shapeSelector));
 
       // Remove any shapes that cover most of the SVG canvas (>= 90% width & height)
-      // This catches big exported background paths that create white/opaque rectangles.
-      const THRESHOLD = 0.9; // remove shapes that occupy >=90% of svg canvas in both dimensions
+      const THRESHOLD = 0.9;
       shapes.forEach(el => {
         try {
-          // getBBox can throw if element not renderable; wrap in try
           const bb = el.getBBox();
           const wRatio = (bb.width / svgW);
           const hRatio = (bb.height / svgH);
@@ -184,9 +175,7 @@
             el.remove();
             return;
           }
-        } catch (e) {
-          // if getBBox fails, skip removal for that element
-        }
+        } catch (e) {}
       });
 
       // Also defensively remove any element with id/class containing 'bg' or 'background'
@@ -196,12 +185,10 @@
       svg.querySelectorAll('*').forEach(el => {
         if (el.tagName.toLowerCase() === 'svg') return;
         try {
-          // Some shapes may already have gradient fills; override them to currentColor
           el.setAttribute('fill', 'currentColor');
           el.setAttribute('stroke', 'none');
-          // keep vector-effect safe
           el.style.vectorEffect = 'non-scaling-stroke';
-        } catch (e) { /* ignore non-attribute-bearing nodes */ }
+        } catch (e) {}
       });
 
     } catch (err) {
@@ -229,13 +216,7 @@
       span.appendChild(clone);
       span.classList.add(spanClass || '');
 
-      // IMPORTANT: preserve asterisk exactly — do NOT sanitize the asterisk template
-      if (templateId === 'svg-asterisk-template') {
-        // intentionally skip sanitization for the asterisk — user-supplied exact artwork preserved
-        return;
-      }
-
-      // Sanitize: find the first svg under span and clean it (for hash)
+      // Sanitize: find the first svg under span and clean it
       const svg = span.querySelector('svg');
       sanitizeInjectedSVG(svg);
 
@@ -248,7 +229,7 @@
   function setupKeys() {
     if (!keysGrid) return;
 
-    // Inject svgs: ASTERISK inserted raw (preserved), HASH sanitized
+    // Inject & sanitize inline svgs for * and #
     injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
     injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
 
