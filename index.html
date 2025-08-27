@@ -9,16 +9,18 @@
 <!-- iOS home-screen title (what appears under the icon) -->
 <meta name="apple-mobile-web-app-title" content="Phone">
 
-<!-- Tell iOS to open the app standalone when launched from Home (optional) -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
 
-<!-- Apple touch icons — include at least the 180x180 PNG for modern iPhones -->
-<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png">
+  <!-- iOS PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Passcode">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180.png">
 
-<!-- Useful fallback icons (optional) -->
-<link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png">
-<link rel="apple-touch-icon" sizes="512x512" href="/icon-512.png">
+  <!-- Favicon for browser -->
+  <link rel="icon" type="image/png" sizes="32x32" href="icon-192.png">
 
 <!-- Theme color -->
 <meta name="theme-color" content="#000000">
