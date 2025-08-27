@@ -1,8 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Behavior: invisible paste button reads clipboard and types with:
-//   1) initial delay = 5000ms before first char
-//   2) inter-character delay = 1000ms between subsequent chars
-// Abort by pressing the paste button again while typing.
+// Behavior preserved: paste button (in hash slot) -> initial 5s then 1s between chars.
+// Adds: visible delete button placed immediately below the paste button; deletes one digit per press.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -219,7 +217,7 @@
   }
 
   /* ---------- Helper: briefly highlight a key visually ---------- */
-  const FLASH_MS = 360; // >= 300ms so fade is visible
+  const FLASH_MS = 360; // >= 300ms so fade visible
   function flashKey(value, ms = FLASH_MS) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
@@ -306,16 +304,10 @@
   let typingInProgress = false;
   let typingAbort = false;
 
-  // Requested timing:
-  const FIRST_DELAY_MS = 5000;    // 5s before the FIRST character
-  const INTER_DELAY_MS  = 1000;   // 1s between subsequent characters
+  const FIRST_DELAY_MS = 5000;    // 5s before FIRST char
+  const INTER_DELAY_MS  = 1000;   // 1s between subsequent chars
 
-  // small helper delay that returns a promise
-  function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // chunked wait so we can detect typingAbort promptly during waits
+  function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
   async function waitUntil(ms) {
     const CHUNK = 100;
     const start = Date.now();
@@ -326,11 +318,7 @@
   }
 
   async function runClipboardTypeSequence() {
-    if (typingInProgress) {
-      // toggle abort on second press
-      typingAbort = true;
-      return;
-    }
+    if (typingInProgress) { typingAbort = true; return; }
 
     let raw = '';
     try {
@@ -343,17 +331,13 @@
 
     raw = (raw || '').trim();
     if (!raw) {
-      console.debug('Clipboard empty — aborting.');
       const pb = document.getElementById('pasteBtn');
       if (pb) try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch(e){}
       return;
     }
 
     const toType = raw.replace(/[^\d+]/g, '');
-    if (!toType) {
-      console.debug('After sanitize nothing to type:', raw);
-      return;
-    }
+    if (!toType) return;
 
     typingInProgress = true;
     typingAbort = false;
@@ -361,53 +345,29 @@
     const pasteBtn = document.getElementById('pasteBtn');
     if (pasteBtn) pasteBtn.classList.add('active');
 
-    console.debug('Will wait', FIRST_DELAY_MS, 'ms before first char, then', INTER_DELAY_MS, 'ms between chars.');
-
-    // initial delay before first character (abortable)
+    // initial wait
     await waitUntil(FIRST_DELAY_MS);
-    if (typingAbort) {
-      console.debug('Typing aborted during initial delay.');
-      typingInProgress = false;
-      typingAbort = false;
-      if (pasteBtn) pasteBtn.classList.remove('active');
-      return;
-    }
+    if (typingAbort) { typingInProgress = false; typingAbort = false; if (pasteBtn) pasteBtn.classList.remove('active'); return; }
 
-    // type first character (if any)
     const chars = Array.from(toType);
-    if (chars.length === 0) {
-      typingInProgress = false;
-      if (pasteBtn) pasteBtn.classList.remove('active');
-      return;
-    }
-
-    // Type characters: first immediately after FIRST_DELAY_MS, then wait INTER_DELAY_MS between subsequent ones
     for (let i = 0; i < chars.length; i++) {
-      if (typingAbort) {
-        console.debug('Typing aborted before char', i);
-        break;
-      }
+      if (typingAbort) break;
       const ch = chars[i];
-      console.debug('Typing char', i, ch);
       flashKey(ch);
       appendChar(ch);
 
-      // if there's a next character, wait inter delay (abortable)
       if (i < chars.length - 1) {
         await waitUntil(INTER_DELAY_MS);
-        if (typingAbort) {
-          console.debug('Typing aborted during inter-character delay after char', i);
-          break;
-        }
+        if (typingAbort) break;
       }
     }
 
     typingInProgress = false;
     typingAbort = false;
     if (pasteBtn) pasteBtn.classList.remove('active');
-    console.debug('Typing sequence finished.');
   }
 
+  /* ---------- Insert invisible paste button into hash slot (unchanged) ---------- */
   function insertInvisiblePasteButtonIntoHashSlot() {
     if (!keysGrid) return;
     const oldHash = keysGrid.querySelector('.key[data-value="#"]');
@@ -420,7 +380,7 @@
     btn.id = 'pasteBtn';
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
 
-    // make it invisible but interactive
+    // invisible but interactive
     btn.style.background = 'transparent';
     btn.style.color = 'transparent';
     btn.style.border = 'none';
@@ -455,6 +415,133 @@
         runClipboardTypeSequence();
       }
     });
+  }
+
+  /* ---------- Insert visible delete button directly below the paste button ---------- */
+  let deleteBtn = null;
+  function createDeleteButton() {
+    // do nothing if already created
+    if (document.getElementById('deleteBtn')) return;
+
+    deleteBtn = document.createElement('button');
+    deleteBtn.id = 'deleteBtn';
+    deleteBtn.className = 'key delete-key';
+    deleteBtn.dataset.value = 'delete';
+    deleteBtn.setAttribute('aria-label', 'Delete digit');
+    deleteBtn.setAttribute('title', 'Delete digit');
+    // Use a backspace glyph (visible for testing)
+    deleteBtn.innerHTML = '<span class="digit">⌫</span><span class="letters"></span>';
+
+    // We'll absolutely position this inside appEl so it sits below the paste slot.
+    deleteBtn.style.position = 'absolute';
+    deleteBtn.style.zIndex = 55;
+    // visible styling (uses CSS variables from :root)
+    deleteBtn.style.background = 'var(--key-fill)';
+    deleteBtn.style.color = 'var(--letters-color)';
+    deleteBtn.style.border = 'none';
+    deleteBtn.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+    deleteBtn.style.borderRadius = '999px';
+    deleteBtn.style.cursor = 'pointer';
+    deleteBtn.style.pointerEvents = 'auto';
+    deleteBtn.style.display = 'flex';
+    deleteBtn.style.alignItems = 'center';
+    deleteBtn.style.justifyContent = 'center';
+    deleteBtn.style.userSelect = 'none';
+
+    // Add event listeners
+    deleteBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      runDeleteOnce();
+    });
+    deleteBtn.addEventListener('pointerdown', (ev) => {
+      try { deleteBtn.setPointerCapture(ev.pointerId); } catch (e) {}
+      deleteBtn.classList.add('pressed');
+    });
+    deleteBtn.addEventListener('pointerup', (ev) => {
+      try { deleteBtn.releasePointerCapture(ev.pointerId); } catch (e) {}
+      setTimeout(()=> deleteBtn.classList.remove('pressed'), 10);
+    });
+    deleteBtn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); deleteBtn.classList.add('pressed'); }
+    });
+    deleteBtn.addEventListener('keyup', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); deleteBtn.classList.remove('pressed'); runDeleteOnce(); }
+    });
+
+    appEl.appendChild(deleteBtn);
+    // initial positioning
+    positionDeleteButtonUnderPaste();
+  }
+
+  function runDeleteOnce() {
+    if (!digits || digits.length === 0) {
+      // small feedback: animate delete button slightly
+      if (deleteBtn) {
+        try { deleteBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 180 }); } catch(e){}
+      }
+      return;
+    }
+    // remove last digit
+    digits = digits.slice(0, -1);
+    updateDisplay();
+    // if cleared, reset background
+    if (digits.length === 0) {
+      try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){}
+    }
+  }
+
+  // compute & set delete button position based on pasteBtn bounding rect
+  function positionDeleteButtonUnderPaste() {
+    const pasteBtn = document.getElementById('pasteBtn');
+    const del = document.getElementById('deleteBtn');
+    if (!pasteBtn || !del) return;
+
+    // use getBoundingClientRect for accurate on-screen position (accounts for transforms)
+    const pasteRect = pasteBtn.getBoundingClientRect();
+    const appRect = appEl.getBoundingClientRect();
+
+    // size: match the paste key size
+    const width = pasteRect.width;
+    const height = pasteRect.height;
+
+    // target: below the paste button with a small gap (8px)
+    const gap = 8;
+
+    // compute left/top relative to appEl
+    const left = pasteRect.left - appRect.left;
+    const top  = pasteRect.bottom - appRect.top + gap;
+
+    del.style.width = width + 'px';
+    del.style.height = height + 'px';
+    del.style.left = Math.round(left) + 'px';
+    del.style.top  = Math.round(top)  + 'px';
+
+    // ensure inner digit sizes match visually; rely on .digit style from CSS
+    // but set font-size to the root digit size for parity
+    // (don't override if CSS already handles it)
+    try {
+      const root = getComputedStyle(document.documentElement);
+      const digitSize = root.getPropertyValue('--digit-size') || '36px';
+      del.querySelector('.digit').style.fontSize = digitSize.trim();
+    } catch (e) {}
+  }
+
+  // reposition delete button on resize/viewport changes so alignment stays correct
+  function watchAndRepositionDeleteBtn() {
+    let tid = null;
+    function schedule() {
+      if (tid) clearTimeout(tid);
+      tid = setTimeout(positionDeleteButtonUnderPaste, 80);
+    }
+    window.addEventListener('resize', schedule);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', schedule);
+      window.visualViewport.addEventListener('scroll', schedule);
+    }
+    window.addEventListener('orientationchange', schedule);
+    // also call occasionally for initial layout stabilization
+    let attempts = 0;
+    const id = setInterval(() => { positionDeleteButtonUnderPaste(); attempts++; if (attempts > 20) clearInterval(id); }, 120);
   }
 
   /* ---------- Keyboard events + calibration toggle ---------- */
@@ -521,8 +608,10 @@
   detectStandalone();
   setupKeys();
 
-  // insert invisible paste button in hash slot
+  // Insert paste button and delete button
   insertInvisiblePasteButtonIntoHashSlot();
+  createDeleteButton();
+  watchAndRepositionDeleteBtn();
 
   updateDisplay();
 
@@ -536,6 +625,9 @@
     isStandalone: () => appEl.classList.contains('standalone'),
     calibration: () => ({...calibration}),
     runClipboardTypeSequence: runClipboardTypeSequence,
-    cancelTyping: () => { typingAbort = true; }
+    cancelTyping: () => { typingAbort = true; },
+    // helpers to tweak during testing:
+    showDeleteBtn: () => { const d=document.getElementById('deleteBtn'); if(d) d.style.opacity='1'; },
+    hideDeleteBtn: () => { const d=document.getElementById('deleteBtn'); if(d) d.style.opacity='0'; }
   };
 })();
