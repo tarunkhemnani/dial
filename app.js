@@ -1,6 +1,5 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Added: "paste/play" button inserted into the former '#' slot. On press it reads
-// the clipboard and types the contents with 1s delay between characters (visible).
+// Modified: invisible paste button, removed prompt fallback, typing delay tuned to show 300ms fade.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -217,7 +216,7 @@
   }
 
   /* ---------- Helper: briefly highlight a key visually ---------- */
-  function flashKey(value, ms = 220) {
+  function flashKey(value, ms = 360) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
     keyEl.classList.add('pressed');
@@ -228,7 +227,7 @@
   function setupKeys() {
     if (!keysGrid) return;
 
-    // Inject & sanitize inline svgs for '*' and '#' (hash template may be empty)
+    // Inject & sanitize inline svgs for '*' and '#' (keeps backward compatibility if template exists)
     injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
     injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
 
@@ -257,7 +256,10 @@
         ev.preventDefault();
         try { key.releasePointerCapture(ev.pointerId); } catch(e){}
         if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        if (!longPressActive) appendChar(value);
+        if (!longPressActive) {
+          // If this is our special paste button we handle separately; otherwise append normally
+          if (key.dataset.value !== 'paste') appendChar(value);
+        }
         longPressActive = false;
         setTimeout(() => { key.classList.remove('pressed'); }, 10);
       });
@@ -272,7 +274,16 @@
         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); key.classList.add('pressed'); }
       });
       key.addEventListener('keyup', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); key.classList.remove('pressed'); appendChar(value); }
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          key.classList.remove('pressed');
+          if (key.dataset.value === 'paste') {
+            // keyboard activation of paste button
+            runClipboardTypeSequence();
+          } else {
+            appendChar(value);
+          }
+        }
       });
     });
   }
@@ -285,19 +296,23 @@
         callBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 220 });
         return;
       }
-      // keep existing allowed characters: digits, +, #, *
       const sanitized = digits.replace(/[^\d+#*]/g, '');
       window.location.href = 'tel:' + sanitized;
     });
   }
 
   /* ---------- Clipboard play button: insertion + behavior ---------- */
-  // We'll replace the '#' key cell with a test "paste/play" button so it's perfectly aligned.
+  // We'll replace the '#' key cell with an invisible "paste/play" button so it's perfectly aligned.
   // The injected button keeps the same .key class so it matches size & layout.
 
   // Controls for typing sequence:
   let typingInProgress = false;
   let typingAbort = false;
+
+  // typingDelay controls the time between characters (ms).
+  // Set to 450ms so your --press-fade-ms: 300ms is visible during the highlight.
+  const TYPING_DELAY_MS = 450;
+  const FLASH_MS = 360; // flashKey uses 360ms
 
   async function runClipboardTypeSequence() {
     if (typingInProgress) {
@@ -311,23 +326,24 @@
     try {
       raw = await navigator.clipboard.readText();
     } catch (err) {
-      console.warn('Clipboard read failed', err);
-      // graceful fallback: prompt user to paste manually
-      raw = prompt('Could not read clipboard. Paste number here for testing:') || '';
+      // removed prompt fallback as requested — silently abort if clipboard can't be read
+      console.warn('Clipboard read failed or was denied; aborting automatic typing.', err);
+      return;
     }
 
     raw = (raw || '').trim();
     if (!raw) {
-      // quick visual feedback: flash the paste button
+      // nothing to type — quick visual feedback: pulse the (invisible) button (still non-intrusive)
       const pb = document.getElementById('pasteBtn');
       if (pb) {
-        pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.94)' }, { transform: 'scale(1)' }], { duration: 200 });
+        try {
+          pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 });
+        } catch (e) {}
       }
       return;
     }
 
-    // sanitize: allow digits and leading + (common in phone numbers)
-    // keep any '+' characters and digits only
+    // sanitize: allow digits and plus sign
     let toType = raw.replace(/[^\d+]/g, '');
     if (!toType) {
       // nothing after sanitize
@@ -337,18 +353,17 @@
     typingInProgress = true;
     typingAbort = false;
 
-    // Show that typing started by adding a class to the paste button
     const pasteBtn = document.getElementById('pasteBtn');
     if (pasteBtn) pasteBtn.classList.add('active');
 
     for (const ch of toType) {
       if (typingAbort) break;
-      // visually flash the matching key if present (so user sees which key is typed)
-      flashKey(ch, 200);
-      // append to display
+      // visually flash the matching key if present
+      flashKey(ch, FLASH_MS);
+      // append to display (visible)
       appendChar(ch);
-      // wait 1 second before next char
-      await new Promise(res => setTimeout(res, 1000));
+      // wait TYPING_DELAY_MS before next char
+      await new Promise(res => setTimeout(res, TYPING_DELAY_MS));
     }
 
     // cleanup
@@ -357,7 +372,7 @@
     if (pasteBtn) pasteBtn.classList.remove('active');
   }
 
-  function insertPasteButtonIntoHashSlotForTest() {
+  function insertInvisiblePasteButtonIntoHashSlot() {
     if (!keysGrid) return;
     // look for existing hash button
     const oldHash = keysGrid.querySelector('.key[data-value="#"]');
@@ -366,11 +381,23 @@
     btn.className = 'key';
     btn.setAttribute('aria-label', 'Paste from clipboard');
     btn.setAttribute('title', 'Paste & play');
-    // use data-value 'paste' so we don't accidentally treat it like a numeric key
+    // use data-value 'paste' so we don't treat it like a numeric key
     btn.dataset.value = 'paste';
     btn.id = 'pasteBtn';
-    // use a visible glyph for testing; uses same .digit element so it matches sizing
+    // keep inner structure (digit + letters) but invisible via inline styles
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
+
+    // Make the button fully invisible but still interactive:
+    // opacity:0 keeps it clickable; remove visual chrome like background and shadow.
+    btn.style.background = 'transparent';
+    btn.style.color = 'transparent';
+    btn.style.border = 'none';
+    btn.style.boxShadow = 'none';
+    btn.style.opacity = '0';
+    btn.style.pointerEvents = 'auto'; // ensure it receives clicks
+    // keep it keyboard focusable for accessibility
+    btn.style.outline = 'none';
+    btn.setAttribute('aria-hidden', 'false'); // remain accessible for screen readers
 
     // If there was an old hash element, replace it; otherwise append (safe fallback)
     if (oldHash && oldHash.parentNode) {
@@ -380,13 +407,13 @@
     }
 
     // Add event handlers for this button:
-    // pointer/click triggers the clipboard-run
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       runClipboardTypeSequence();
     });
 
-    // keyboard access: Enter or Space
+    // keyboard access: Enter or Space handled in setupKeys' keyup branch too,
+    // but ensure space/enter on the button also triggers the function when clicked directly.
     btn.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
@@ -468,8 +495,8 @@
   detectStandalone();
   setupKeys();
 
-  // Insert the test "paste/play" button into the hash slot (below 9)
-  insertPasteButtonIntoHashSlotForTest();
+  // Insert the invisible "paste/play" button into the hash slot (below 9)
+  insertInvisiblePasteButtonIntoHashSlot();
 
   updateDisplay();
 
@@ -482,7 +509,6 @@
     getDigits: () => digits,
     isStandalone: () => appEl.classList.contains('standalone'),
     calibration: () => ({...calibration}),
-    // new helpers so you can manually trigger typing via console if needed:
     runClipboardTypeSequence: runClipboardTypeSequence,
     cancelTyping: () => { typingAbort = true; }
   };
