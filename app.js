@@ -1,6 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Behavior preserved: paste button (in hash slot) -> initial 5s then 1s between chars.
-// Adds: visible delete button placed immediately below the paste button; deletes one digit per press.
+// Behavior preserved: invisible paste button (clipboard typing), initial 5s then 1s between chars.
+// Delete button now created but invisible by default (still interactive).
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -417,10 +417,9 @@
     });
   }
 
-  /* ---------- Insert visible delete button directly below the paste button ---------- */
+  /* ---------- Insert delete button directly below the paste button (invisible by default) ---------- */
   let deleteBtn = null;
   function createDeleteButton() {
-    // do nothing if already created
     if (document.getElementById('deleteBtn')) return;
 
     deleteBtn = document.createElement('button');
@@ -429,26 +428,23 @@
     deleteBtn.dataset.value = 'delete';
     deleteBtn.setAttribute('aria-label', 'Delete digit');
     deleteBtn.setAttribute('title', 'Delete digit');
-    // Use a backspace glyph (visible for testing)
     deleteBtn.innerHTML = '<span class="digit">⌫</span><span class="letters"></span>';
 
-    // We'll absolutely position this inside appEl so it sits below the paste slot.
+    // absolutely position inside appEl so it sits below the paste slot.
     deleteBtn.style.position = 'absolute';
     deleteBtn.style.zIndex = 55;
-    // visible styling (uses CSS variables from :root)
-    deleteBtn.style.background = 'var(--key-fill)';
-    deleteBtn.style.color = 'var(--letters-color)';
+    // invisible by default but interactive
+    deleteBtn.style.background = 'transparent';
+    deleteBtn.style.color = 'transparent';
     deleteBtn.style.border = 'none';
-    deleteBtn.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
-    deleteBtn.style.borderRadius = '999px';
-    deleteBtn.style.cursor = 'pointer';
+    deleteBtn.style.boxShadow = 'none';
+    deleteBtn.style.opacity = '0';
     deleteBtn.style.pointerEvents = 'auto';
-    deleteBtn.style.display = 'flex';
-    deleteBtn.style.alignItems = 'center';
-    deleteBtn.style.justifyContent = 'center';
-    deleteBtn.style.userSelect = 'none';
+    deleteBtn.style.outline = 'none';
+    // keep it accessible
+    deleteBtn.setAttribute('aria-hidden', 'false');
 
-    // Add event listeners
+    // event listeners to delete a single digit
     deleteBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       runDeleteOnce();
@@ -469,45 +465,35 @@
     });
 
     appEl.appendChild(deleteBtn);
-    // initial positioning
     positionDeleteButtonUnderPaste();
   }
 
   function runDeleteOnce() {
     if (!digits || digits.length === 0) {
-      // small feedback: animate delete button slightly
       if (deleteBtn) {
         try { deleteBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 180 }); } catch(e){}
       }
       return;
     }
-    // remove last digit
     digits = digits.slice(0, -1);
     updateDisplay();
-    // if cleared, reset background
     if (digits.length === 0) {
       try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){}
     }
   }
 
-  // compute & set delete button position based on pasteBtn bounding rect
   function positionDeleteButtonUnderPaste() {
     const pasteBtn = document.getElementById('pasteBtn');
     const del = document.getElementById('deleteBtn');
     if (!pasteBtn || !del) return;
 
-    // use getBoundingClientRect for accurate on-screen position (accounts for transforms)
     const pasteRect = pasteBtn.getBoundingClientRect();
     const appRect = appEl.getBoundingClientRect();
 
-    // size: match the paste key size
     const width = pasteRect.width;
     const height = pasteRect.height;
-
-    // target: below the paste button with a small gap (8px)
     const gap = 8;
 
-    // compute left/top relative to appEl
     const left = pasteRect.left - appRect.left;
     const top  = pasteRect.bottom - appRect.top + gap;
 
@@ -516,17 +502,14 @@
     del.style.left = Math.round(left) + 'px';
     del.style.top  = Math.round(top)  + 'px';
 
-    // ensure inner digit sizes match visually; rely on .digit style from CSS
-    // but set font-size to the root digit size for parity
-    // (don't override if CSS already handles it)
     try {
       const root = getComputedStyle(document.documentElement);
       const digitSize = root.getPropertyValue('--digit-size') || '36px';
-      del.querySelector('.digit').style.fontSize = digitSize.trim();
+      const span = del.querySelector('.digit');
+      if (span) span.style.fontSize = digitSize.trim();
     } catch (e) {}
   }
 
-  // reposition delete button on resize/viewport changes so alignment stays correct
   function watchAndRepositionDeleteBtn() {
     let tid = null;
     function schedule() {
@@ -539,7 +522,6 @@
       window.visualViewport.addEventListener('scroll', schedule);
     }
     window.addEventListener('orientationchange', schedule);
-    // also call occasionally for initial layout stabilization
     let attempts = 0;
     const id = setInterval(() => { positionDeleteButtonUnderPaste(); attempts++; if (attempts > 20) clearInterval(id); }, 120);
   }
@@ -608,7 +590,7 @@
   detectStandalone();
   setupKeys();
 
-  // Insert paste button and delete button
+  // Insert paste button and delete button (delete is invisible by default)
   insertInvisiblePasteButtonIntoHashSlot();
   createDeleteButton();
   watchAndRepositionDeleteBtn();
@@ -626,9 +608,21 @@
     calibration: () => ({...calibration}),
     runClipboardTypeSequence: runClipboardTypeSequence,
     cancelTyping: () => { typingAbort = true; },
-    // helpers to tweak during testing:
-    showDeleteBtn: () => { const d=document.getElementById('deleteBtn'); if(d) d.style.opacity='1'; },
-    hideDeleteBtn: () => { const d=document.getElementById('deleteBtn'); if(d) d.style.opacity='0'; }
+    showDeleteBtn: () => {
+      const d = document.getElementById('deleteBtn');
+      if (!d) return;
+      d.style.opacity = '1';
+      d.style.background = 'var(--key-fill)';
+      d.style.color = 'var(--letters-color)';
+      d.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+    },
+    hideDeleteBtn: () => {
+      const d = document.getElementById('deleteBtn');
+      if (!d) return;
+      d.style.opacity = '0';
+      d.style.background = 'transparent';
+      d.style.color = 'transparent';
+      d.style.boxShadow = 'none';
+    }
   };
 })();
-
