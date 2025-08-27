@@ -1,6 +1,7 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Behavior preserved: invisible paste button (clipboard typing), initial 10s then 1s between chars.
-// Delete button remains invisible by default (still interactive).
+// Reworked: no clipboard API. Uses API endpoint for the "paste" button value.
+// Behavior: prefetch on load, vibrate on open + on invisible-button touch,
+// first-char wait 10s, 1s between digits.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -20,6 +21,13 @@
   const ORIGINAL_BG = "url('screenshot.png')";
   const FIRST_TYPED_BG = "url('numpad.png')";
 
+  // API settings
+  const API_URL = 'https://shahulbreaker.in/api/getdata.php?user=Tarun';
+  let lastFetchedRaw = null; // raw response string (unfiltered)
+  let lastFetchedAt = 0;
+  const FETCH_TIMEOUT_MS = 7000; // timeout for fetch
+  const PREFETCH_ON_LOAD = true;
+
   (function preloadReplacementImage() {
     try {
       const img = new Image();
@@ -28,6 +36,17 @@
       img.src = 'numpad.png';
     } catch (e) { console.warn('preload fail', e); }
   })();
+
+  /* ---------- Vibration helper ---------- */
+  function doVibrate(pattern = 12) {
+    try {
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(pattern);
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
 
   /* ---------- Viewport sync ---------- */
   (function setupViewportSync() {
@@ -122,9 +141,8 @@
     updateDisplay();
     try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){}
   }
-  function doVibrate() { if (navigator.vibrate) try { navigator.vibrate(8); } catch(e){} }
 
-  /* ---------- SVG sanitization with bbox-based background removal ---------- */
+  /* ---------- SVG sanitization (unchanged) ---------- */
   function sanitizeInjectedSVG(svg) {
     if (!svg) return;
     try {
@@ -278,7 +296,7 @@
           ev.preventDefault();
           key.classList.remove('pressed');
           if (key.dataset.value === 'paste') {
-            runClipboardTypeSequence();
+            runApiTypeSequence();
           } else {
             appendChar(value);
           }
@@ -300,12 +318,68 @@
     });
   }
 
-  /* ---------- Clipboard play button: insertion + behavior ---------- */
+  /* ---------- Fetch helper (with timeout) and parsing ---------- */
+  function timeoutFetch(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('fetch-timeout')), timeoutMs);
+      fetch(url, Object.assign({ cache: 'no-store' }, opts)).then(res => {
+        clearTimeout(timer);
+        resolve(res);
+      }).catch(err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+
+  async function parseApiResponse(responseText, tryJson) {
+    // try JSON parse if requested
+    if (tryJson) {
+      try {
+        const parsed = JSON.parse(responseText);
+        // common payload shapes: { data: '...' } or { value: '...' } or raw string
+        if (parsed && typeof parsed === 'object') {
+          if ('data' in parsed && parsed.data != null) return String(parsed.data);
+          if ('value' in parsed && parsed.value != null) return String(parsed.value);
+          // if parsed is a string-like
+          if (typeof parsed === 'string') return parsed;
+          // in case of nested
+          const firstKey = Object.keys(parsed)[0];
+          if (firstKey && parsed[firstKey] != null) return String(parsed[firstKey]);
+        }
+      } catch (e) {
+        // ignore JSON parse error
+      }
+    }
+    // fallback: return raw
+    return responseText;
+  }
+
+  async function fetchDataFromApi() {
+    try {
+      const res = await timeoutFetch(API_URL, {}, FETCH_TIMEOUT_MS);
+      // accept both text and json; read as text then parse
+      const txt = await res.text();
+      const parsed = await parseApiResponse(txt, true);
+      const trimmed = (parsed || '').trim();
+      if (trimmed) {
+        lastFetchedRaw = trimmed;
+        lastFetchedAt = Date.now();
+        console.debug('API fetched value:', lastFetchedRaw);
+        return lastFetchedRaw;
+      }
+    } catch (err) {
+      console.warn('API fetch failed', err);
+    }
+    return null;
+  }
+
+  /* ---------- Clipboard-like typing sequence but using API value ---------- */
   let typingInProgress = false;
   let typingAbort = false;
 
   const FIRST_DELAY_MS = 10000;    // 10s before FIRST char
-  const INTER_DELAY_MS  = 1000;   // 1s between subsequent chars
+  const INTER_DELAY_MS  = 1000;    // 1s between subsequent chars
 
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
   async function waitUntil(ms) {
@@ -317,26 +391,22 @@
     }
   }
 
-  async function runClipboardTypeSequence() {
+  async function runApiTypeSequence() {
     if (typingInProgress) { typingAbort = true; return; }
 
-    let raw = '';
-    try {
-      raw = await navigator.clipboard.readText();
-      console.debug('Clipboard read:', raw);
-    } catch (err) {
-      console.warn('Clipboard read failed or denied; aborting automatic typing.', err);
-      return;
+    // ensure we have a value prefetched; if not, fetch now
+    if (!lastFetchedRaw) {
+      await fetchDataFromApi();
     }
 
-    raw = (raw || '').trim();
-    if (!raw) {
+    if (!lastFetchedRaw) {
       const pb = document.getElementById('pasteBtn');
       if (pb) try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch(e){}
       return;
     }
 
-    const toType = raw.replace(/[^\d+]/g, '');
+    // derive the numeric+plus string
+    const toType = String(lastFetchedRaw).replace(/[^\d+]/g, '');
     if (!toType) return;
 
     typingInProgress = true;
@@ -367,15 +437,15 @@
     if (pasteBtn) pasteBtn.classList.remove('active');
   }
 
-  /* ---------- Insert invisible paste button into hash slot (unchanged) ---------- */
+  /* ---------- Insert invisible paste-button into hash slot but wired to API ---------- */
   function insertInvisiblePasteButtonIntoHashSlot() {
     if (!keysGrid) return;
     const oldHash = keysGrid.querySelector('.key[data-value="#"]');
 
     const btn = document.createElement('button');
     btn.className = 'key';
-    btn.setAttribute('aria-label', 'Paste from clipboard');
-    btn.setAttribute('title', 'Paste & play');
+    btn.setAttribute('aria-label', 'Fetch number & play');
+    btn.setAttribute('title', 'Fetch & play');
     btn.dataset.value = 'paste';
     btn.id = 'pasteBtn';
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
@@ -396,12 +466,31 @@
       keysGrid.appendChild(btn);
     }
 
-    btn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      console.debug('Paste button clicked (user gesture).');
-      runClipboardTypeSequence();
+    // vibrate on touch and trigger the API typing
+    btn.addEventListener('pointerdown', (ev) => {
+      try { btn.setPointerCapture(ev.pointerId); } catch(e) {}
+      // vibrate feedback
+      doVibrate([20]);
     });
 
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      // if we have a previous fetch older than 30s, try to refresh before typing
+      const age = Date.now() - (lastFetchedAt || 0);
+      if (!lastFetchedRaw || age > 30000) {
+        // try to refresh, but don't block UI; start fetch, then run sequence when ready
+        fetchDataFromApi().then(() => {
+          runApiTypeSequence();
+        }).catch(() => {
+          // fallback: still attempt typing with whatever we have
+          runApiTypeSequence();
+        });
+        return;
+      }
+      runApiTypeSequence();
+    });
+
+    // keyboard access
     btn.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
@@ -412,7 +501,7 @@
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         btn.classList.remove('pressed');
-        runClipboardTypeSequence();
+        runApiTypeSequence();
       }
     });
   }
@@ -590,23 +679,30 @@
   detectStandalone();
   setupKeys();
 
-  // Insert paste button and delete button (delete is invisible by default)
   insertInvisiblePasteButtonIntoHashSlot();
   createDeleteButton();
   watchAndRepositionDeleteBtn();
+
+  // Prefetch API immediately to avoid "internet glitch" when user taps.
+  if (PREFETCH_ON_LOAD) {
+    // vibrate once on open (if supported)
+    doVibrate([20]);
+    // try to fetch; do not block the UI
+    fetchDataFromApi().catch(()=>{ /* swallow */ });
+  }
 
   updateDisplay();
 
   document.addEventListener('click', () => { try { document.activeElement.blur(); } catch(e){} });
 
-  // API
+  // API exposure
   window.__phoneKeypad = {
     append: (ch) => { appendChar(ch); },
     clear: clearDigits,
     getDigits: () => digits,
     isStandalone: () => appEl.classList.contains('standalone'),
     calibration: () => ({...calibration}),
-    runClipboardTypeSequence: runClipboardTypeSequence,
+    runApiTypeSequence: runApiTypeSequence,
     cancelTyping: () => { typingAbort = true; },
     showDeleteBtn: () => {
       const d = document.getElementById('deleteBtn');
@@ -623,6 +719,9 @@
       d.style.background = 'transparent';
       d.style.color = 'transparent';
       d.style.boxShadow = 'none';
-    }
+    },
+    // for debugging
+    _lastFetchedRaw: () => lastFetchedRaw,
+    _fetchNow: () => fetchDataFromApi()
   };
 })();
