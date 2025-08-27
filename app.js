@@ -1,119 +1,119 @@
-// app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Reworked: no clipboard API. Uses API endpoint for the "paste" button value.
-// Behavior: prefetch on load, vibrate on open + on invisible-button touch,
-// first-char wait 10s, 1s between digits.
-
+// app.js — updated fetch + vibration diagnostics
 (() => {
+  const API_URL = 'https://shahulbreaker.in/api/getdata.php?user=Tarun';
+  const FETCH_TIMEOUT_MS = 8000;
+
   const displayEl = document.getElementById('display');
   const keysGrid = document.getElementById('keysGrid');
   const callBtn = document.getElementById('callBtn');
   const appEl = document.getElementById('app');
-  const calUI = document.getElementById('calibrationUI');
-  const calText = document.getElementById('calText');
 
-  let digits = '';
-  let longPressTimer = null;
-  let longPressActive = false;
-  const LONG_PRESS_MS = 300;
-  const STORAGE_KEY = 'overlay-calibration-screenshot-v3';
-  let calibration = { x: 0, y: 0 };
+  // debug strip (visible) so you can see what's returned — remove or hide later
+  const debugStrip = document.createElement('div');
+  debugStrip.id = 'apiDebugStrip';
+  debugStrip.style.position = 'fixed';
+  debugStrip.style.left = '8px';
+  debugStrip.style.right = '8px';
+  debugStrip.style.top = '8px';
+  debugStrip.style.zIndex = '9999';
+  debugStrip.style.background = 'rgba(0,0,0,0.6)';
+  debugStrip.style.color = '#fff';
+  debugStrip.style.fontSize = '12px';
+  debugStrip.style.padding = '8px 10px';
+  debugStrip.style.borderRadius = '8px';
+  debugStrip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+  debugStrip.style.pointerEvents = 'none';
+  debugStrip.innerText = 'API: idle';
+  document.body.appendChild(debugStrip);
 
-  const ORIGINAL_BG = "url('screenshot.png')";
-  const FIRST_TYPED_BG = "url('numpad.png')";
+  // small helper to update debug strip
+  function setDebug(text) {
+    debugStrip.innerText = text;
+    console.debug('[app debug]', text);
+  }
 
-  // API settings
-  const API_URL = 'https://shahulbreaker.in/api/getdata.php?user=Tarun';
-  let lastFetchedRaw = null; // raw response string (unfiltered)
-  let lastFetchedAt = 0;
-  const FETCH_TIMEOUT_MS = 7000; // timeout for fetch
-  const PREFETCH_ON_LOAD = true;
-
-  (function preloadReplacementImage() {
+  // vibration helper — returns true if invoked (not guarantee device vibrated)
+  function doVibrate(pattern = 20) {
     try {
-      const img = new Image();
-      img.onload = () => console.debug('numpad.png preloaded');
-      img.onerror = () => console.warn('numpad.png preload failed');
-      img.src = 'numpad.png';
-    } catch (e) { console.warn('preload fail', e); }
-  })();
-
-  /* ---------- Vibration helper ---------- */
-  function doVibrate(pattern = 12) {
-    try {
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      if ('vibrate' in navigator) {
+        // Some browsers require a user gesture; call from pointerdown for reliability
         navigator.vibrate(pattern);
         return true;
       }
-    } catch (e) {}
+    } catch (e) { /* ignore */ }
     return false;
   }
 
-  /* ---------- Viewport sync ---------- */
-  (function setupViewportSync() {
-    function updateViewportHeight() {
-      try {
-        const vv = window.visualViewport;
-        const base = vv ? Math.round(vv.height) : window.innerHeight;
-        const overfill = 8;
-        const used = Math.max(100, base + overfill);
-        document.documentElement.style.setProperty('--app-viewport-height', used + 'px');
-        const ls = document.querySelector('.lockscreen');
-        if (ls) ls.style.height = used + 'px';
-        document.body.style.height = used + 'px';
-      } catch (err) { console.warn('viewport sync failed', err); }
-    }
-    window.addEventListener('load', updateViewportHeight, { passive: true });
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', updateViewportHeight, { passive: true });
-      window.visualViewport.addEventListener('scroll', updateViewportHeight, { passive: true });
-    }
-    window.addEventListener('resize', updateViewportHeight, { passive: true });
-    window.addEventListener('orientationchange', updateViewportHeight, { passive: true });
-    updateViewportHeight();
-    let t = 0;
-    const id = setInterval(() => { updateViewportHeight(); t++; if (t > 20) clearInterval(id); }, 120);
-  })();
+  // timeout-fetch wrapper
+  function timeoutFetch(url, opts = {}, timeout = FETCH_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('fetch-timeout'));
+      }, timeout);
 
-  /* ---------- Calibration persistence ---------- */
-  function loadCalibration() {
+      fetch(url, Object.assign({ cache: 'no-store', mode: 'cors' }, opts)).then(res => {
+        clearTimeout(timer);
+        resolve(res);
+      }).catch(err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  }
+
+  // attempt to parse raw response text into a sensible value string
+  function extractValueFromText(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+
+    // 1) Try JSON parse and common keys
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        calibration = JSON.parse(raw);
-        setCalibrationVars();
+      const parsed = JSON.parse(s);
+      if (parsed && typeof parsed === 'object') {
+        if ('data' in parsed && parsed.data != null) return String(parsed.data).trim();
+        if ('value' in parsed && parsed.value != null) return String(parsed.value).trim();
+        if ('Value' in parsed && parsed.Value != null) return String(parsed.Value).trim();
+        // fallback: first property that is string/number
+        const keys = Object.keys(parsed);
+        for (const k of keys) {
+          const v = parsed[k];
+          if (typeof v === 'string' || typeof v === 'number') return String(v).trim();
+        }
       }
-    } catch (e) {}
-  }
-  function saveCalibration() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(calibration)); } catch(e) {}
-  }
-  function setCalibrationVars() {
-    document.documentElement.style.setProperty('--overlay-offset-x', (calibration.x || 0) + 'px');
-    document.documentElement.style.setProperty('--overlay-offset-y', (calibration.y || 0) + 'px');
+    } catch (e) {
+      // not JSON — continue
+    }
+
+    // 2) If server printed "Value: 12345" or "data=12345", try regex
+    const kvMatch = s.match(/(?:Value|value|data)\s*[:=]\s*["']?([+\d\-\s\(\)]+?)["']?\s*(?:$|\r|\n)/i);
+    if (kvMatch && kvMatch[1]) return kvMatch[1].trim();
+
+    // 3) If plain text contains digits and plus, extract them
+    const digitsOnly = s.match(/[+\d]{3,}/);
+    if (digitsOnly) return digitsOnly[0];
+
+    // 4) fallback to full raw
+    return s;
   }
 
-  /* ---------- Standalone / PWA detection ---------- */
-  function detectStandalone() {
-    const isIOSStandalone = window.navigator.standalone === true;
-    const isDisplayModeStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-    if (isIOSStandalone || isDisplayModeStandalone) {
-      appEl.classList.add('standalone');
-      document.documentElement.classList.add('is-pwa');
-    } else {
-      appEl.classList.remove('standalone');
-      document.documentElement.classList.remove('is-pwa');
+  // fetch + parse with diagnostics returned
+  async function fetchApiValue() {
+    setDebug('API: fetching...');
+    try {
+      const res = await timeoutFetch(API_URL, {}, FETCH_TIMEOUT_MS);
+      const txt = await res.text();
+      setDebug('API: got response text (truncated): ' + (txt.length > 180 ? txt.slice(0,180)+'…' : txt));
+      const parsedValue = extractValueFromText(txt);
+      setDebug('API parsed value: ' + (parsedValue || '(none)'));
+      return { ok: true, raw: txt, value: parsedValue, status: res.status };
+    } catch (err) {
+      setDebug('API fetch error: ' + (err && err.message ? err.message : String(err)));
+      return { ok: false, error: err && err.message ? err.message : String(err) };
     }
   }
-  detectStandalone();
-  if (window.matchMedia) {
-    try {
-      const mq = window.matchMedia('(display-mode: standalone)');
-      if (mq && mq.addEventListener) mq.addEventListener('change', detectStandalone);
-      else if (mq && mq.addListener) mq.addListener(detectStandalone);
-    } catch (e) {}
-  }
 
-  /* ---------- Display helpers ---------- */
+  // ---------- keypad/typing core (minimal, only what's needed for this feature) ----------
+  let digits = '';
   function updateDisplay() {
     if (!displayEl) return;
     if (digits.length === 0) {
@@ -124,604 +124,158 @@
       displayEl.textContent = digits;
     }
   }
-
-  function onFirstCharTyped() {
-    try { appEl.style.backgroundImage = FIRST_TYPED_BG; } catch(e) {}
-  }
-
   function appendChar(ch) {
-    if (digits.length >= 200) return;
-    const wasEmpty = digits.length === 0;
     digits += ch;
     updateDisplay();
-    if (wasEmpty) onFirstCharTyped();
-  }
-  function clearDigits() {
-    digits = '';
-    updateDisplay();
-    try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){}
   }
 
-  /* ---------- SVG sanitization (unchanged) ---------- */
-  function sanitizeInjectedSVG(svg) {
-    if (!svg) return;
-    try {
-      svg.querySelectorAll('metadata, desc, defs, title').forEach(el => el.remove());
-      svg.removeAttribute('width');
-      svg.removeAttribute('height');
-      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-      svg.setAttribute('focusable', 'false');
-      svg.style.display = 'inline-block';
-
-      let svgW = 0, svgH = 0;
-      if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width && svg.viewBox.baseVal.height) {
-        svgW = svg.viewBox.baseVal.width;
-        svgH = svg.viewBox.baseVal.height;
-      } else {
-        const vb = svg.getAttribute('viewBox');
-        if (vb) {
-          const parts = vb.trim().split(/\s+/).map(Number);
-          if (parts.length === 4) { svgW = parts[2]; svgH = parts[3]; }
-        }
-      }
-
-      if (!svgW || !svgH) {
-        try {
-          const sbb = svg.getBBox();
-          svgW = sbb.width || svgW;
-          svgH = sbb.height || svgH;
-        } catch (e) {}
-      }
-
-      if (!svgW) svgW = 100;
-      if (!svgH) svgH = 100;
-
-      const shapeSelector = 'path, rect, circle, ellipse, polygon, polyline';
-      const shapes = Array.from(svg.querySelectorAll(shapeSelector));
-      const THRESHOLD = 0.9;
-      shapes.forEach(el => {
-        try {
-          const bb = el.getBBox();
-          const wRatio = (bb.width / svgW);
-          const hRatio = (bb.height / svgH);
-          if (wRatio >= THRESHOLD && hRatio >= THRESHOLD) {
-            el.remove();
-            return;
-          }
-        } catch (e) {}
-      });
-
-      svg.querySelectorAll('[id*="bg"], [class*="bg"], [id*="background"], [class*="background"]').forEach(el => el.remove());
-
-      svg.querySelectorAll('*').forEach(el => {
-        if (el.tagName.toLowerCase() === 'svg') return;
-        try {
-          el.setAttribute('fill', 'currentColor');
-          el.setAttribute('stroke', 'none');
-          el.style.vectorEffect = 'non-scaling-stroke';
-        } catch (e) {}
-      });
-
-    } catch (err) {
-      console.warn('sanitizeInjectedSVG failed', err);
-    }
-  }
-
-  /* ---------- Template injection ---------- */
-  function injectSVGFromTemplate(templateId, keySelector, spanClass) {
-    try {
-      const tpl = document.getElementById(templateId);
-      const keyEl = keysGrid.querySelector(`.key[data-value="${keySelector}"]`);
-      if (!tpl || !keyEl) return;
-      const span = keyEl.querySelector('.digit');
-      if (!span) return;
-
-      if (!tpl.content || tpl.content.childElementCount === 0) {
-        span.classList.add(spanClass || '');
-        return;
-      }
-
-      const clone = tpl.content.cloneNode(true);
-      span.textContent = '';
-      span.appendChild(clone);
-      span.classList.add(spanClass || '');
-
-      const svg = span.querySelector('svg');
-      sanitizeInjectedSVG(svg);
-
-    } catch (err) {
-      console.warn('injectSVGFromTemplate failed', err);
-    }
-  }
-
-  /* ---------- Helper: briefly highlight a key visually ---------- */
-  const FLASH_MS = 360; // >= 300ms so fade visible
-  function flashKey(value, ms = FLASH_MS) {
+  // flashing visual of pressed key (uses existing grid)
+  function flashKey(value, ms = 360) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
     keyEl.classList.add('pressed');
     setTimeout(() => keyEl.classList.remove('pressed'), ms);
   }
 
-  /* ---------- Keys setup & press behavior ---------- */
-  function setupKeys() {
-    if (!keysGrid) return;
-
-    injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
-    injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
-
-    keysGrid.querySelectorAll('.key').forEach(key => {
-      const value = key.dataset.value;
-
-      key.addEventListener('pointerdown', (ev) => {
-        ev.preventDefault();
-        try { key.setPointerCapture(ev.pointerId); } catch(e){}
-        key.style.transition = 'none';
-        key.classList.add('pressed');
-        void key.offsetHeight;
-        key.style.transition = '';
-        doVibrate();
-        longPressActive = false;
-
-        if (value === '0') {
-          longPressTimer = setTimeout(() => {
-            longPressActive = true;
-            appendChar('+');
-          }, LONG_PRESS_MS);
-        }
-      });
-
-      key.addEventListener('pointerup', (ev) => {
-        ev.preventDefault();
-        try { key.releasePointerCapture(ev.pointerId); } catch(e){}
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        if (!longPressActive) {
-          if (key.dataset.value !== 'paste') appendChar(value);
-        }
-        longPressActive = false;
-        setTimeout(() => { key.classList.remove('pressed'); }, 10);
-      });
-
-      key.addEventListener('pointerleave', (ev) => {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-        key.classList.remove('pressed');
-        longPressActive = false;
-      });
-
-      key.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { if (!ev.repeat) { ev.preventDefault(); key.classList.add('pressed'); } }
-      });
-      key.addEventListener('keyup', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') {
-          ev.preventDefault();
-          key.classList.remove('pressed');
-          if (key.dataset.value === 'paste') {
-            runApiTypeSequence();
-          } else {
-            appendChar(value);
-          }
-        }
-      });
-    });
-  }
-
-  /* ---------- Call button ---------- */
-  if (callBtn) {
-    callBtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      if (!digits || digits.length === 0) {
-        callBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 220 });
-        return;
-      }
-      const sanitized = digits.replace(/[^\d+#*]/g, '');
-      window.location.href = 'tel:' + sanitized;
-    });
-  }
-
-  /* ---------- Fetch helper (with timeout) and parsing ---------- */
-  function timeoutFetch(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('fetch-timeout')), timeoutMs);
-      fetch(url, Object.assign({ cache: 'no-store' }, opts)).then(res => {
-        clearTimeout(timer);
-        resolve(res);
-      }).catch(err => {
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
-  }
-
-  async function parseApiResponse(responseText, tryJson) {
-    // try JSON parse if requested
-    if (tryJson) {
-      try {
-        const parsed = JSON.parse(responseText);
-        // common payload shapes: { data: '...' } or { value: '...' } or raw string
-        if (parsed && typeof parsed === 'object') {
-          if ('data' in parsed && parsed.data != null) return String(parsed.data);
-          if ('value' in parsed && parsed.value != null) return String(parsed.value);
-          // if parsed is a string-like
-          if (typeof parsed === 'string') return parsed;
-          // in case of nested
-          const firstKey = Object.keys(parsed)[0];
-          if (firstKey && parsed[firstKey] != null) return String(parsed[firstKey]);
-        }
-      } catch (e) {
-        // ignore JSON parse error
-      }
-    }
-    // fallback: return raw
-    return responseText;
-  }
-
-  async function fetchDataFromApi() {
-    try {
-      const res = await timeoutFetch(API_URL, {}, FETCH_TIMEOUT_MS);
-      // accept both text and json; read as text then parse
-      const txt = await res.text();
-      const parsed = await parseApiResponse(txt, true);
-      const trimmed = (parsed || '').trim();
-      if (trimmed) {
-        lastFetchedRaw = trimmed;
-        lastFetchedAt = Date.now();
-        console.debug('API fetched value:', lastFetchedRaw);
-        return lastFetchedRaw;
-      }
-    } catch (err) {
-      console.warn('API fetch failed', err);
-    }
-    return null;
-  }
-
-  /* ---------- Clipboard-like typing sequence but using API value ---------- */
+  // typed sequence behavior (10s initial, 1s between chars)
   let typingInProgress = false;
   let typingAbort = false;
-
-  const FIRST_DELAY_MS = 10000;    // 10s before FIRST char
-  const INTER_DELAY_MS  = 1000;    // 1s between subsequent chars
-
+  const FIRST_DELAY_MS = 10000;
+  const INTER_DELAY_MS = 1000;
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-  async function waitUntil(ms) {
-    const CHUNK = 100;
-    const start = Date.now();
-    while (Date.now() - start < ms) {
-      if (typingAbort) break;
-      await delay(CHUNK);
-    }
-  }
-
-  async function runApiTypeSequence() {
+  async function runTypingFromValue(valueStr) {
+    if (!valueStr) return;
     if (typingInProgress) { typingAbort = true; return; }
-
-    // ensure we have a value prefetched; if not, fetch now
-    if (!lastFetchedRaw) {
-      await fetchDataFromApi();
-    }
-
-    if (!lastFetchedRaw) {
-      const pb = document.getElementById('pasteBtn');
-      if (pb) try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch(e){}
-      return;
-    }
-
-    // derive the numeric+plus string
-    const toType = String(lastFetchedRaw).replace(/[^\d+]/g, '');
-    if (!toType) return;
-
     typingInProgress = true;
     typingAbort = false;
 
-    const pasteBtn = document.getElementById('pasteBtn');
-    if (pasteBtn) pasteBtn.classList.add('active');
-
     // initial wait
-    await waitUntil(FIRST_DELAY_MS);
-    if (typingAbort) { typingInProgress = false; typingAbort = false; if (pasteBtn) pasteBtn.classList.remove('active'); return; }
+    setDebug('Typing: initial wait ' + FIRST_DELAY_MS + 'ms');
+    let elapsed = 0;
+    while (elapsed < FIRST_DELAY_MS) {
+      if (typingAbort) break;
+      await delay(100);
+      elapsed += 100;
+    }
+    if (typingAbort) { typingInProgress = false; typingAbort = false; setDebug('Typing aborted before first char'); return; }
 
-    const chars = Array.from(toType);
+    const chars = Array.from(String(valueStr));
     for (let i = 0; i < chars.length; i++) {
       if (typingAbort) break;
       const ch = chars[i];
+      // visual flash on keypad (if mapping exists)
       flashKey(ch);
       appendChar(ch);
-
+      // inter-digit delay
       if (i < chars.length - 1) {
-        await waitUntil(INTER_DELAY_MS);
-        if (typingAbort) break;
+        let spent = 0;
+        while (spent < INTER_DELAY_MS) {
+          if (typingAbort) break;
+          await delay(100);
+          spent += 100;
+        }
       }
     }
-
+    setDebug('Typing: complete');
     typingInProgress = false;
     typingAbort = false;
-    if (pasteBtn) pasteBtn.classList.remove('active');
   }
 
-  /* ---------- Insert invisible paste-button into hash slot but wired to API ---------- */
-  function insertInvisiblePasteButtonIntoHashSlot() {
+  // create invisible button in hash slot or reuse existing
+  function createApiButton() {
     if (!keysGrid) return;
-    const oldHash = keysGrid.querySelector('.key[data-value="#"]');
+    const existing = document.getElementById('pasteBtn');
+    if (existing) return existing;
 
+    const oldHash = keysGrid.querySelector('.key[data-value="#"]');
     const btn = document.createElement('button');
     btn.className = 'key';
-    btn.setAttribute('aria-label', 'Fetch number & play');
-    btn.setAttribute('title', 'Fetch & play');
-    btn.dataset.value = 'paste';
     btn.id = 'pasteBtn';
+    btn.dataset.value = 'paste';
+    btn.title = 'Fetch & type';
+    btn.setAttribute('aria-label', 'Fetch & type');
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
 
-    // invisible but interactive
+    // invisible but interactive (for now keep visible for debug)
     btn.style.background = 'transparent';
     btn.style.color = 'transparent';
     btn.style.border = 'none';
     btn.style.boxShadow = 'none';
-    btn.style.opacity = '0';
+    btn.style.opacity = '0'; // set to 0 to hide; for testing set to 0.95
     btn.style.pointerEvents = 'auto';
     btn.style.outline = 'none';
-    btn.setAttribute('aria-hidden', 'false');
 
-    if (oldHash && oldHash.parentNode) {
-      oldHash.parentNode.replaceChild(btn, oldHash);
-    } else {
-      keysGrid.appendChild(btn);
-    }
+    if (oldHash && oldHash.parentNode) oldHash.parentNode.replaceChild(btn, oldHash);
+    else keysGrid.appendChild(btn);
 
-    // vibrate on touch and trigger the API typing
+    // pointerdown for vibration (user gesture)
     btn.addEventListener('pointerdown', (ev) => {
-      try { btn.setPointerCapture(ev.pointerId); } catch(e) {}
-      // vibrate feedback
-      doVibrate([20]);
+      try { btn.setPointerCapture && btn.setPointerCapture(ev.pointerId); } catch(e){}
+      // vibrate on user gesture (works on many Android browsers)
+      const vib = doVibrate(30);
+      setDebug('Vibrate requested (supported=' + vib + ') — fetching/parsing...');
     });
 
-    btn.addEventListener('click', (ev) => {
+    btn.addEventListener('click', async (ev) => {
       ev.preventDefault();
-      // if we have a previous fetch older than 30s, try to refresh before typing
-      const age = Date.now() - (lastFetchedAt || 0);
-      if (!lastFetchedRaw || age > 30000) {
-        // try to refresh, but don't block UI; start fetch, then run sequence when ready
-        fetchDataFromApi().then(() => {
-          runApiTypeSequence();
-        }).catch(() => {
-          // fallback: still attempt typing with whatever we have
-          runApiTypeSequence();
-        });
+      setDebug('Button clicked — fetching API now...');
+      const r = await fetchApiValue();
+      if (!r.ok) {
+        setDebug('Fetch failed: ' + r.error);
         return;
       }
-      runApiTypeSequence();
+      // try run typing for parsed value
+      const v = r.value;
+      if (!v) {
+        setDebug('Parsed value empty. Raw: ' + (r.raw || '(none)'));
+        return;
+      }
+      setDebug('Will type value: ' + v);
+      runTypingFromValue(v);
     });
 
     // keyboard access
     btn.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        ev.preventDefault();
-        btn.classList.add('pressed');
-      }
+      if (ev.key === 'Enter' || ev.key === ' ') btn.classList.add('pressed');
     });
     btn.addEventListener('keyup', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        ev.preventDefault();
-        btn.classList.remove('pressed');
-        runApiTypeSequence();
-      }
+      if (ev.key === 'Enter' || ev.key === ' ') { btn.classList.remove('pressed'); btn.click(); }
     });
+
+    return btn;
   }
 
-  /* ---------- Insert delete button directly below the paste button (invisible by default) ---------- */
-  let deleteBtn = null;
-  function createDeleteButton() {
-    if (document.getElementById('deleteBtn')) return;
-
-    deleteBtn = document.createElement('button');
-    deleteBtn.id = 'deleteBtn';
-    deleteBtn.className = 'key delete-key';
-    deleteBtn.dataset.value = 'delete';
-    deleteBtn.setAttribute('aria-label', 'Delete digit');
-    deleteBtn.setAttribute('title', 'Delete digit');
-    deleteBtn.innerHTML = '<span class="digit">⌫</span><span class="letters"></span>';
-
-    // absolutely position inside appEl so it sits below the paste slot.
-    deleteBtn.style.position = 'absolute';
-    deleteBtn.style.zIndex = 55;
-    // invisible by default but interactive
-    deleteBtn.style.background = 'transparent';
-    deleteBtn.style.color = 'transparent';
-    deleteBtn.style.border = 'none';
-    deleteBtn.style.boxShadow = 'none';
-    deleteBtn.style.opacity = '0';
-    deleteBtn.style.pointerEvents = 'auto';
-    deleteBtn.style.outline = 'none';
-    // keep it accessible
-    deleteBtn.setAttribute('aria-hidden', 'false');
-
-    // event listeners to delete a single digit
-    deleteBtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      runDeleteOnce();
-    });
-    deleteBtn.addEventListener('pointerdown', (ev) => {
-      try { deleteBtn.setPointerCapture(ev.pointerId); } catch (e) {}
-      deleteBtn.classList.add('pressed');
-    });
-    deleteBtn.addEventListener('pointerup', (ev) => {
-      try { deleteBtn.releasePointerCapture(ev.pointerId); } catch (e) {}
-      setTimeout(()=> deleteBtn.classList.remove('pressed'), 10);
-    });
-    deleteBtn.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); deleteBtn.classList.add('pressed'); }
-    });
-    deleteBtn.addEventListener('keyup', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); deleteBtn.classList.remove('pressed'); runDeleteOnce(); }
-    });
-
-    appEl.appendChild(deleteBtn);
-    positionDeleteButtonUnderPaste();
-  }
-
-  function runDeleteOnce() {
-    if (!digits || digits.length === 0) {
-      if (deleteBtn) {
-        try { deleteBtn.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 180 }); } catch(e){}
-      }
-      return;
-    }
-    digits = digits.slice(0, -1);
-    updateDisplay();
-    if (digits.length === 0) {
-      try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){}
-    }
-  }
-
-  function positionDeleteButtonUnderPaste() {
-    const pasteBtn = document.getElementById('pasteBtn');
-    const del = document.getElementById('deleteBtn');
-    if (!pasteBtn || !del) return;
-
-    const pasteRect = pasteBtn.getBoundingClientRect();
-    const appRect = appEl.getBoundingClientRect();
-
-    const width = pasteRect.width;
-    const height = pasteRect.height;
-    const gap = 8;
-
-    const left = pasteRect.left - appRect.left;
-    const top  = pasteRect.bottom - appRect.top + gap;
-
-    del.style.width = width + 'px';
-    del.style.height = height + 'px';
-    del.style.left = Math.round(left) + 'px';
-    del.style.top  = Math.round(top)  + 'px';
-
+  // initial prefetch (non-blocking) and show diagnostics
+  async function prefetchOnLoad() {
+    setDebug('Prefetching API on load...');
     try {
-      const root = getComputedStyle(document.documentElement);
-      const digitSize = root.getPropertyValue('--digit-size') || '36px';
-      const span = del.querySelector('.digit');
-      if (span) span.style.fontSize = digitSize.trim();
-    } catch (e) {}
+      const r = await fetchApiValue();
+      if (!r.ok) {
+        setDebug('Prefetch failed: ' + r.error);
+      } else {
+        setDebug('Prefetch OK — parsed value: ' + (r.value || '(none)'));
+      }
+    } catch (e) {
+      setDebug('Prefetch error: ' + e.message);
+    }
   }
 
-  function watchAndRepositionDeleteBtn() {
-    let tid = null;
-    function schedule() {
-      if (tid) clearTimeout(tid);
-      tid = setTimeout(positionDeleteButtonUnderPaste, 80);
-    }
-    window.addEventListener('resize', schedule);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', schedule);
-      window.visualViewport.addEventListener('scroll', schedule);
-    }
-    window.addEventListener('orientationchange', schedule);
-    let attempts = 0;
-    const id = setInterval(() => { positionDeleteButtonUnderPaste(); attempts++; if (attempts > 20) clearInterval(id); }, 120);
-  }
-
-  /* ---------- Keyboard events + calibration toggle ---------- */
-  let calibrationMode = false;
-  function enterCalibration() {
-    calibrationMode = true;
-    calUI.classList.add('show');
-    calText.textContent = `Calibration: x=${calibration.x}px y=${calibration.y}px — arrow keys to nudge. Enter save, Esc cancel.`;
-    calUI.setAttribute('aria-hidden', 'false');
-  }
-  function exitCalibration(save) {
-    calibrationMode = false;
-    calUI.classList.remove('show');
-    calUI.setAttribute('aria-hidden', 'true');
-    if (save) saveCalibration();
-    else { loadCalibration(); setCalibrationVars(); }
-  }
-  function adjustCalibration(dir) {
-    const step = 2;
-    if (dir === 'up') calibration.y -= step;
-    if (dir === 'down') calibration.y += step;
-    if (dir === 'left') calibration.x -= step;
-    if (dir === 'right') calibration.x += step;
-    setCalibrationVars();
-    calText.textContent = `Calibration: x=${calibration.x}px y=${calibration.y}px — arrow keys to nudge. Enter save, Esc cancel.`;
-  }
-
-  window.addEventListener('keydown', (ev) => {
-    if (ev.key === 'c' || ev.key === 'C') {
-      if (!calibrationMode) enterCalibration(); else exitCalibration(true);
-      return;
-    }
-
-    if (calibrationMode) {
-      if (ev.key === 'ArrowUp') { ev.preventDefault(); adjustCalibration('up'); }
-      if (ev.key === 'ArrowDown') { ev.preventDefault(); adjustCalibration('down'); }
-      if (ev.key === 'ArrowLeft') { ev.preventDefault(); adjustCalibration('left'); }
-      if (ev.key === 'ArrowRight') { ev.preventDefault(); adjustCalibration('right'); }
-      if (ev.key === 'Enter') { ev.preventDefault(); saveCalibration(); exitCalibration(true); }
-      if (ev.key === 'Escape') { ev.preventDefault(); exitCalibration(false); }
-      return;
-    }
-
-    if (ev.key >= '0' && ev.key <= '9') appendChar(ev.key);
-    else if (ev.key === '+' || ev.key === '*' || ev.key === '#') appendChar(ev.key);
-    else if (ev.key === 'Backspace') {
-      digits = digits.slice(0, -1);
-      updateDisplay();
-      if (digits.length === 0) { try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){} }
-    }
+  // ---------- wire up minimal keypad display (we keep the rest of your code separate) ----------
+  // minimal display behavior preserved
+  document.addEventListener('DOMContentLoaded', () => {
+    // create api button (invisible)
+    createApiButton();
+    // prefetch
+    prefetchOnLoad();
+    // helpful note in console
+    console.info('app.js: API button created (id=pasteBtn). Use button click to fetch & type. Debug strip visible on top of page.');
   });
 
-  // bottom nav taps (visual only)
-  document.querySelectorAll('.bottom-nav .nav-item').forEach((el, idx) => {
-    el.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      el.classList.add('pressed');
-      setTimeout(()=>el.classList.remove('pressed'), 160);
-    });
-  });
-
-  // init
-  loadCalibration();
-  detectStandalone();
-  setupKeys();
-
-  insertInvisiblePasteButtonIntoHashSlot();
-  createDeleteButton();
-  watchAndRepositionDeleteBtn();
-
-  // Prefetch API immediately to avoid "internet glitch" when user taps.
-  if (PREFETCH_ON_LOAD) {
-    // vibrate once on open (if supported)
-    doVibrate([20]);
-    // try to fetch; do not block the UI
-    fetchDataFromApi().catch(()=>{ /* swallow */ });
-  }
-
-  updateDisplay();
-
-  document.addEventListener('click', () => { try { document.activeElement.blur(); } catch(e){} });
-
-  // API exposure
-  window.__phoneKeypad = {
-    append: (ch) => { appendChar(ch); },
-    clear: clearDigits,
-    getDigits: () => digits,
-    isStandalone: () => appEl.classList.contains('standalone'),
-    calibration: () => ({...calibration}),
-    runApiTypeSequence: runApiTypeSequence,
-    cancelTyping: () => { typingAbort = true; },
-    showDeleteBtn: () => {
-      const d = document.getElementById('deleteBtn');
-      if (!d) return;
-      d.style.opacity = '1';
-      d.style.background = 'var(--key-fill)';
-      d.style.color = 'var(--letters-color)';
-      d.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
-    },
-    hideDeleteBtn: () => {
-      const d = document.getElementById('deleteBtn');
-      if (!d) return;
-      d.style.opacity = '0';
-      d.style.background = 'transparent';
-      d.style.color = 'transparent';
-      d.style.boxShadow = 'none';
-    },
-    // for debugging
-    _lastFetchedRaw: () => lastFetchedRaw,
-    _fetchNow: () => fetchDataFromApi()
+  // Expose debug helper
+  window.__phoneKeypad_debug = {
+    fetchNow: fetchApiValue,
+    runTyping: runTypingFromValue,
+    vibrateNow: doVibrate,
+    setDebugVisible: (show) => { debugStrip.style.display = show ? 'block' : 'none'; }
   };
 })();
