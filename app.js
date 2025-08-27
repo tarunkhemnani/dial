@@ -1,5 +1,6 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Modified: invisible paste button, removed prompt fallback, typing delay tuned to show 300ms fade.
+// Modified: invisible paste button, removed prompt fallback, typing delay = 1500ms,
+// flash duration kept >= 300ms so your --press-fade-ms: 300ms is visible.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -216,7 +217,9 @@
   }
 
   /* ---------- Helper: briefly highlight a key visually ---------- */
-  function flashKey(value, ms = 360) {
+  // FLASH_MS >= your --press-fade-ms (300ms) so fade is visible
+  const FLASH_MS = 360;
+  function flashKey(value, ms = FLASH_MS) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
     keyEl.classList.add('pressed');
@@ -257,7 +260,6 @@
         try { key.releasePointerCapture(ev.pointerId); } catch(e){}
         if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
         if (!longPressActive) {
-          // If this is our special paste button we handle separately; otherwise append normally
           if (key.dataset.value !== 'paste') appendChar(value);
         }
         longPressActive = false;
@@ -271,14 +273,13 @@
       });
 
       key.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); key.classList.add('pressed'); }
+        if (ev.key === 'Enter' || ev.key === ' ') { if (!ev.repeat) { ev.preventDefault(); key.classList.add('pressed'); } }
       });
       key.addEventListener('keyup', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') {
           ev.preventDefault();
           key.classList.remove('pressed');
           if (key.dataset.value === 'paste') {
-            // keyboard activation of paste button
             runClipboardTypeSequence();
           } else {
             appendChar(value);
@@ -302,53 +303,38 @@
   }
 
   /* ---------- Clipboard play button: insertion + behavior ---------- */
-  // We'll replace the '#' key cell with an invisible "paste/play" button so it's perfectly aligned.
-  // The injected button keeps the same .key class so it matches size & layout.
-
-  // Controls for typing sequence:
   let typingInProgress = false;
   let typingAbort = false;
 
-  // typingDelay controls the time between characters (ms).
-  // Set to 450ms so your --press-fade-ms: 300ms is visible during the highlight.
-  const TYPING_DELAY_MS = 450;
-  const FLASH_MS = 360; // flashKey uses 360ms
+  // Set typing delay to 1500ms so your 300ms fade is visible between the typed characters
+  const TYPING_DELAY_MS = 1500;
 
   async function runClipboardTypeSequence() {
     if (typingInProgress) {
-      // second press cancels the current typing
       typingAbort = true;
       return;
     }
 
-    // Attempt to read clipboard on a user gesture
     let raw = '';
     try {
       raw = await navigator.clipboard.readText();
     } catch (err) {
-      // removed prompt fallback as requested — silently abort if clipboard can't be read
       console.warn('Clipboard read failed or was denied; aborting automatic typing.', err);
       return;
     }
 
     raw = (raw || '').trim();
     if (!raw) {
-      // nothing to type — quick visual feedback: pulse the (invisible) button (still non-intrusive)
       const pb = document.getElementById('pasteBtn');
       if (pb) {
-        try {
-          pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 });
-        } catch (e) {}
+        try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch (e) {}
       }
       return;
     }
 
     // sanitize: allow digits and plus sign
     let toType = raw.replace(/[^\d+]/g, '');
-    if (!toType) {
-      // nothing after sanitize
-      return;
-    }
+    if (!toType) return;
 
     typingInProgress = true;
     typingAbort = false;
@@ -358,15 +344,11 @@
 
     for (const ch of toType) {
       if (typingAbort) break;
-      // visually flash the matching key if present
       flashKey(ch, FLASH_MS);
-      // append to display (visible)
       appendChar(ch);
-      // wait TYPING_DELAY_MS before next char
       await new Promise(res => setTimeout(res, TYPING_DELAY_MS));
     }
 
-    // cleanup
     typingInProgress = false;
     typingAbort = false;
     if (pasteBtn) pasteBtn.classList.remove('active');
@@ -374,46 +356,37 @@
 
   function insertInvisiblePasteButtonIntoHashSlot() {
     if (!keysGrid) return;
-    // look for existing hash button
     const oldHash = keysGrid.querySelector('.key[data-value="#"]');
-    // build the new button element
+
     const btn = document.createElement('button');
     btn.className = 'key';
     btn.setAttribute('aria-label', 'Paste from clipboard');
     btn.setAttribute('title', 'Paste & play');
-    // use data-value 'paste' so we don't treat it like a numeric key
     btn.dataset.value = 'paste';
     btn.id = 'pasteBtn';
-    // keep inner structure (digit + letters) but invisible via inline styles
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
 
-    // Make the button fully invisible but still interactive:
-    // opacity:0 keeps it clickable; remove visual chrome like background and shadow.
+    // invisible but interactive
     btn.style.background = 'transparent';
     btn.style.color = 'transparent';
     btn.style.border = 'none';
     btn.style.boxShadow = 'none';
     btn.style.opacity = '0';
-    btn.style.pointerEvents = 'auto'; // ensure it receives clicks
-    // keep it keyboard focusable for accessibility
+    btn.style.pointerEvents = 'auto';
     btn.style.outline = 'none';
-    btn.setAttribute('aria-hidden', 'false'); // remain accessible for screen readers
+    btn.setAttribute('aria-hidden', 'false');
 
-    // If there was an old hash element, replace it; otherwise append (safe fallback)
     if (oldHash && oldHash.parentNode) {
       oldHash.parentNode.replaceChild(btn, oldHash);
     } else {
       keysGrid.appendChild(btn);
     }
 
-    // Add event handlers for this button:
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       runClipboardTypeSequence();
     });
 
-    // keyboard access: Enter or Space handled in setupKeys' keyup branch too,
-    // but ensure space/enter on the button also triggers the function when clicked directly.
     btn.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
@@ -442,74 +415,4 @@
     calUI.classList.remove('show');
     calUI.setAttribute('aria-hidden', 'true');
     if (save) saveCalibration();
-    else { loadCalibration(); setCalibrationVars(); }
-  }
-  function adjustCalibration(dir) {
-    const step = 2;
-    if (dir === 'up') calibration.y -= step;
-    if (dir === 'down') calibration.y += step;
-    if (dir === 'left') calibration.x -= step;
-    if (dir === 'right') calibration.x += step;
-    setCalibrationVars();
-    calText.textContent = `Calibration: x=${calibration.x}px y=${calibration.y}px — arrow keys to nudge. Enter save, Esc cancel.`;
-  }
-
-  window.addEventListener('keydown', (ev) => {
-    // toggle calibration with 'c'
-    if (ev.key === 'c' || ev.key === 'C') {
-      if (!calibrationMode) enterCalibration(); else exitCalibration(true);
-      return;
-    }
-
-    if (calibrationMode) {
-      if (ev.key === 'ArrowUp') { ev.preventDefault(); adjustCalibration('up'); }
-      if (ev.key === 'ArrowDown') { ev.preventDefault(); adjustCalibration('down'); }
-      if (ev.key === 'ArrowLeft') { ev.preventDefault(); adjustCalibration('left'); }
-      if (ev.key === 'ArrowRight') { ev.preventDefault(); adjustCalibration('right'); }
-      if (ev.key === 'Enter') { ev.preventDefault(); saveCalibration(); exitCalibration(true); }
-      if (ev.key === 'Escape') { ev.preventDefault(); exitCalibration(false); }
-      return;
-    }
-
-    // general keypad typing
-    if (ev.key >= '0' && ev.key <= '9') appendChar(ev.key);
-    else if (ev.key === '+' || ev.key === '*' || ev.key === '#') appendChar(ev.key);
-    else if (ev.key === 'Backspace') {
-      digits = digits.slice(0, -1);
-      updateDisplay();
-      if (digits.length === 0) { try { appEl.style.backgroundImage = ORIGINAL_BG; } catch(e){} }
-    }
-  });
-
-  // bottom nav taps (visual only)
-  document.querySelectorAll('.bottom-nav .nav-item').forEach((el, idx) => {
-    el.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      el.classList.add('pressed');
-      setTimeout(()=>el.classList.remove('pressed'), 160);
-    });
-  });
-
-  // init
-  loadCalibration();
-  detectStandalone();
-  setupKeys();
-
-  // Insert the invisible "paste/play" button into the hash slot (below 9)
-  insertInvisiblePasteButtonIntoHashSlot();
-
-  updateDisplay();
-
-  document.addEventListener('click', () => { try { document.activeElement.blur(); } catch(e){} });
-
-  // API
-  window.__phoneKeypad = {
-    append: (ch) => { appendChar(ch); },
-    clear: clearDigits,
-    getDigits: () => digits,
-    isStandalone: () => appEl.classList.contains('standalone'),
-    calibration: () => ({...calibration}),
-    runClipboardTypeSequence: runClipboardTypeSequence,
-    cancelTyping: () => { typingAbort = true; }
-  };
-})();
+    else { loadCalibration
