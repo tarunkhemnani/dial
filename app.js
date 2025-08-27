@@ -1,6 +1,5 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Modified: invisible paste button, removed prompt fallback, typing delay = 1500ms,
-// flash duration kept >= 300ms so your --press-fade-ms: 300ms is visible.
+// Modified: typing delay set to 5000ms; added console.debug logging and robust delay helper.
 
 (() => {
   const displayEl = document.getElementById('display');
@@ -23,7 +22,7 @@
   (function preloadReplacementImage() {
     try {
       const img = new Image();
-      img.onload = () => console.log('numpad.png preloaded');
+      img.onload = () => console.debug('numpad.png preloaded');
       img.onerror = () => console.warn('numpad.png preload failed');
       img.src = 'numpad.png';
     } catch (e) { console.warn('preload fail', e); }
@@ -111,7 +110,7 @@
   }
 
   function appendChar(ch) {
-    if (digits.length >= 50) return;
+    if (digits.length >= 200) return;
     const wasEmpty = digits.length === 0;
     digits += ch;
     updateDisplay();
@@ -217,8 +216,7 @@
   }
 
   /* ---------- Helper: briefly highlight a key visually ---------- */
-  // FLASH_MS >= your --press-fade-ms (300ms) so fade is visible
-  const FLASH_MS = 360;
+  const FLASH_MS = 600; // long enough so the 300ms fade is visible
   function flashKey(value, ms = FLASH_MS) {
     const keyEl = keysGrid.querySelector(`.key[data-value="${value}"]`);
     if (!keyEl) return;
@@ -230,7 +228,6 @@
   function setupKeys() {
     if (!keysGrid) return;
 
-    // Inject & sanitize inline svgs for '*' and '#' (keeps backward compatibility if template exists)
     injectSVGFromTemplate('svg-asterisk-template', '*', 'digit-asterisk');
     injectSVGFromTemplate('svg-hash-template', '#', 'digit-hash');
 
@@ -306,35 +303,45 @@
   let typingInProgress = false;
   let typingAbort = false;
 
-  // Set typing delay to 1500ms so your 300ms fade is visible between the typed characters
-  const TYPING_DELAY_MS = 1500;
+  // **User request:** 5000 ms (5 seconds)
+  const TYPING_DELAY_MS = 5000;
+
+  // small helper delay that returns a promise
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
   async function runClipboardTypeSequence() {
     if (typingInProgress) {
+      console.debug('Typing already in progress — setting abort flag.');
       typingAbort = true;
       return;
     }
 
+    // Read clipboard (must be initiated from user gesture)
     let raw = '';
     try {
       raw = await navigator.clipboard.readText();
+      console.debug('Clipboard read:', raw);
     } catch (err) {
-      console.warn('Clipboard read failed or was denied; aborting automatic typing.', err);
+      console.warn('Clipboard read failed or denied; aborting automatic typing.', err);
       return;
     }
 
     raw = (raw || '').trim();
     if (!raw) {
+      console.debug('Clipboard empty or whitespace — aborting.');
       const pb = document.getElementById('pasteBtn');
-      if (pb) {
-        try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch (e) {}
-      }
+      if (pb) try { pb.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { duration: 200 }); } catch(e){}
       return;
     }
 
     // sanitize: allow digits and plus sign
-    let toType = raw.replace(/[^\d+]/g, '');
-    if (!toType) return;
+    const toType = raw.replace(/[^\d+]/g, '');
+    if (!toType) {
+      console.debug('After sanitize nothing to type:', raw);
+      return;
+    }
 
     typingInProgress = true;
     typingAbort = false;
@@ -342,16 +349,34 @@
     const pasteBtn = document.getElementById('pasteBtn');
     if (pasteBtn) pasteBtn.classList.add('active');
 
+    console.debug('Starting typing sequence:', toType, 'delay between chars (ms):', TYPING_DELAY_MS);
+
     for (const ch of toType) {
-      if (typingAbort) break;
+      if (typingAbort) {
+        console.debug('Typing aborted by user.');
+        break;
+      }
+
+      console.debug('Typing char:', ch);
+      // flash the corresponding key (if it exists)
       flashKey(ch, FLASH_MS);
+      // append char (visible in the display)
       appendChar(ch);
-      await new Promise(res => setTimeout(res, TYPING_DELAY_MS));
+      // wait the configured delay, but still allow abort during the wait
+      const start = Date.now();
+      while (Date.now() - start < TYPING_DELAY_MS) {
+        if (typingAbort) break;
+        // sleep a small chunk so abort can be detected quickly
+        // and the loop isn't blocking other tasks
+        // eslint-disable-next-line no-await-in-loop
+        await delay(100);
+      }
     }
 
     typingInProgress = false;
     typingAbort = false;
     if (pasteBtn) pasteBtn.classList.remove('active');
+    console.debug('Typing sequence finished/cleaned up.');
   }
 
   function insertInvisiblePasteButtonIntoHashSlot() {
@@ -366,7 +391,7 @@
     btn.id = 'pasteBtn';
     btn.innerHTML = '<span class="digit">▶</span><span class="letters"></span>';
 
-    // invisible but interactive
+    // make it invisible but interactive
     btn.style.background = 'transparent';
     btn.style.color = 'transparent';
     btn.style.border = 'none';
@@ -384,6 +409,7 @@
 
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
+      console.debug('Paste button clicked (user gesture).');
       runClipboardTypeSequence();
     });
 
@@ -397,6 +423,7 @@
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         btn.classList.remove('pressed');
+        console.debug('Paste button triggered by keyboard.');
         runClipboardTypeSequence();
       }
     });
@@ -466,7 +493,7 @@
   detectStandalone();
   setupKeys();
 
-  // Insert the invisible "paste/play" button into the hash slot (below 9)
+  // insert invisible paste button
   insertInvisiblePasteButtonIntoHashSlot();
 
   updateDisplay();
