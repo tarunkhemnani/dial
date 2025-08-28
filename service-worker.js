@@ -6,16 +6,14 @@ const OFFLINE_ASSETS = [
   '/styles.css',
   '/app.js',
   '/manifest.json',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/icons/apple-touch-icon-180.png',
-  '/icons/apple-touch-icon-167.png',
-  '/icons/apple-touch-icon-152.png',
-  '/icons/apple-touch-icon-120.png',
-  '/icons/apple-touch-icon-76.png',
-  '/icons/apple-touch-icon-57.png',
-  '/icons/favicon-32x32.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon-180.png',
+  '/icons/apple-touch-icon-152.png', // optional
+  '/icons/apple-touch-icon-120.png', // optional
+  '/favicon-32x32.png'
 ];
+
 
 
 self.addEventListener('install', (evt) => {
@@ -41,4 +39,5 @@ self.addEventListener('fetch', (evt) => {
     caches.match(evt.request).then(cached => cached || fetch(evt.request).catch(()=>{}))
   );
 });
+
 
