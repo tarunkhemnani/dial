@@ -1,28 +1,45 @@
 // service-worker.js
-// Robust service worker optimized for PWAs and iOS apple-touch-icon behavior.
-// Customize ASSETS_TO_CACHE to match the exact paths where you host files.
+// Offline-first, iOS-friendly service worker for the Phone Keypad PWA.
+//
+// Key features:
+// - Precache all render-critical assets (HTML, CSS, JS, icons, images).
+// - Network-first for navigations with a short timeout; fallback to cached index.html.
+// - Cache-first for same-origin static assets (.css, .js, images, icons, manifest).
+// - Graceful fallbacks when offline (image fallback to apple-touch icon).
+// - Versioned cache with cleanup of old versions.
+// - Works when hosted at the domain root or a subdirectory (builds URLs from scope).
+//
+// IMPORTANT: Open the app once online to let the SW install and fill the cache before going offline.
 
-const CACHE_VERSION = 'v2'; // bump this on deploy to force cache refresh
+const CACHE_VERSION = 'v3'; // bump on deploy to refresh cache
 const CACHE_NAME = `phone-keypad-${CACHE_VERSION}`;
 
-const ASSETS_TO_CACHE = [
-  '/',                    // prefer root
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/manifest.json',
+// Compute base path from SW scope so it works under subdirectories too.
+const BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 
-  // icons (ensure these paths exactly match files you uploaded)
-  '/apple-touch-icon-180.png',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/favicon-32x32.png',
-
-  // optional assets referenced by your app (add any additional images you need cached)
-  '/numpad.png',
+// List assets relative to BASE; no leading slash needed.
+const ASSET_PATHS = [
+  'index.html',
+  'styles.css',
+  'app.js',
+  'manifest.json',
+  'apple-touch-icon-180.png',
+  'icon-192.png',
+  'icon-512.png',
+  'favicon-32x32.png',
+  'numpad.png',
+  'screenshot.png',
+  'service-worker.js'
 ];
 
-// Utility to detect image requests (used to provide an image fallback instead of HTML)
+// Build absolute URLs scoped to BASE.
+function urlFromBase(p) {
+  const clean = String(p || '').replace(/^\/+/, '');
+  return `${BASE}/${clean}`;
+}
+const ASSETS_TO_CACHE = ASSET_PATHS.map(urlFromBase);
+
+// Small helper to detect images.
 function isImageRequest(request) {
   if (request.destination && request.destination === 'image') return true;
   try {
@@ -33,111 +50,142 @@ function isImageRequest(request) {
   }
 }
 
+// A short network timeout for navigations (milliseconds)
+const NAV_TIMEOUT_MS = 3500;
+
 // Install: cache the app shell
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(async (cache) => {
-        // Use addAll for speed but guard against single-file failures.
-        try {
-          await cache.addAll(ASSETS_TO_CACHE);
-        } catch (err) {
-          // If addAll fails (one file missing), add individually to salvage what we can.
-          console.warn('SW: cache.addAll failed — falling back to individual caching', err);
-          await Promise.all(
-            ASSETS_TO_CACHE.map(async (asset) => {
-              try {
-                await cache.add(asset);
-              } catch (e) {
-                console.warn('SW: failed to cache', asset, e);
-              }
-            })
-          );
-        }
-      })
-  );
-});
-
-// Activate: remove old caches and take control
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then(keys => Promise.all(
-      keys
-        .filter(k => k !== CACHE_NAME)
-        .map(k => caches.delete(k))
-    )).then(() => self.clients.claim())
-  );
-});
-
-// Fetch handler
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-
-  // Only handle GET requests here; let non-GET pass to network.
-  if (req.method !== 'GET') {
-    return;
-  }
-
-  const reqUrl = new URL(req.url);
-
-  // Navigation requests (HTML pages): network-first, fallback to cached index.html
-  if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
-    event.respondWith(
-      fetch(req)
-        .then((networkResponse) => {
-          // Update cached index.html so we have latest offline copy
-          const copy = networkResponse.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put('/index.html', copy));
-          return networkResponse;
-        })
-        .catch(() => caches.match('/index.html'))
-    );
-    return;
-  }
-
-  // For other GET requests: try cache first, then network.
-  event.respondWith(
-    caches.match(req).then(cached => {
-      if (cached) {
-        return cached;
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // Try addAll first; if a single file fails, fall back to adding individually.
+      try {
+        await cache.addAll(ASSETS_TO_CACHE);
+      } catch (err) {
+        console.warn('SW: cache.addAll failed — fallback to individual add', err);
+        await Promise.all(
+          ASSETS_TO_CACHE.map(async (asset) => {
+            try {
+              await cache.add(asset);
+            } catch (e) {
+              console.warn('SW: failed to cache', asset, e);
+            }
+          })
+        );
       }
-
-      return fetch(req)
-        .then((networkResponse) => {
-          // Only cache successful same-origin responses to avoid CORS issues.
-          if (!networkResponse || networkResponse.status !== 200) {
-            return networkResponse;
-          }
-
-          // Cache same-origin resources
-          if (reqUrl.origin === self.location.origin) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then(cache => {
-              try {
-                cache.put(req, clone);
-              } catch (e) {
-                // Some requests (opaque responses) may throw; ignore gracefully.
-                console.warn('SW: cache.put failed for', req.url, e);
-              }
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          // Network failed and nothing in cache -> provide sensible fallbacks:
-          if (isImageRequest(req)) {
-            // Return the apple-touch icon or any cached icon as an image fallback
-            return caches.match('/apple-touch-icon-180.png');
-          }
-          // For other assets, return a generic 503 response (don't return index.html for assets)
-          return new Response(null, { status: 503, statusText: 'Service Unavailable' });
-        });
     })
   );
 });
 
-// Allow web app to command SW to skip waiting and activate immediately
+// Activate: cleanup old versions and take control immediately
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k !== CACHE_NAME)
+          .map((k) => caches.delete(k))
+      );
+      await self.clients.claim();
+    })()
+  );
+});
+
+// Fetch strategy:
+// - Navigations: network-first with timeout -> fallback to cached index.html.
+// - Same-origin static assets (css/js/images/manifest): cache-first -> network -> fallback.
+// - Cross-origin: pass-through network; no caching.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+  const isSameOrigin = url.origin === self.location.origin;
+
+  // Handle navigations (HTML documents)
+  const accept = req.headers.get('accept') || '';
+  const isHTMLNavigation =
+    req.mode === 'navigate' || accept.includes('text/html');
+
+  if (isHTMLNavigation) {
+    event.respondWith(handleNavigation(req));
+    return;
+  }
+
+  // For other same-origin GETs: cache-first for app shell assets and images
+  if (isSameOrigin) {
+    event.respondWith(cacheFirst(req));
+    return;
+  }
+
+  // Default: try network, no caching
+  event.respondWith(fetch(req).catch(() => new Response(null, { status: 503, statusText: 'Service Unavailable' })));
+});
+
+// Network-first with timeout for navigations, fallback to cached index.html
+async function handleNavigation(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const indexUrl = urlFromBase('index.html');
+
+  // Race network against a short timeout to avoid long hangs offline
+  const timeout = new Promise((resolve) =>
+    setTimeout(() => resolve(undefined), NAV_TIMEOUT_MS)
+  );
+
+  const network = (async () => {
+    try {
+      const res = await fetch(request);
+      // Update cached index.html opportunistically if same-origin
+      if (res && res.ok && new URL(request.url).origin === self.location.origin) {
+        cache.put(indexUrl, res.clone()).catch(() => {});
+      }
+      return res;
+    } catch (e) {
+      return undefined;
+    }
+  })();
+
+  const winner = await Promise.race([network, timeout]);
+
+  if (winner) return winner;
+
+  // Network failed or timed out: serve cached index
+  const cached = await cache.match(indexUrl);
+  if (cached) return cached;
+
+  // Last resort
+  return new Response('<!doctype html><title>Offline</title><h1>Offline</h1>', {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    status: 503,
+    statusText: 'Service Unavailable'
+  });
+}
+
+// Cache-first for static same-origin assets with graceful fallbacks
+async function cacheFirst(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(request);
+    // Only cache successful same-origin responses (avoid CORS issues)
+    if (res && res.ok) {
+      try { await cache.put(request, res.clone()); } catch (e) { /* ignore */ }
+    }
+    return res;
+  } catch (e) {
+    // Offline fallback for images -> apple-touch icon if present
+    if (isImageRequest(request)) {
+      const fallback = await cache.match(urlFromBase('apple-touch-icon-180.png'));
+      if (fallback) return fallback;
+    }
+    return new Response(null, { status: 503, statusText: 'Service Unavailable' });
+  }
+}
+
+// Support messages from the page (e.g., trigger SKIP_WAITING on update)
 self.addEventListener('message', (event) => {
   if (!event.data) return;
   if (event.data.type === 'SKIP_WAITING') {
