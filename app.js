@@ -1,7 +1,60 @@
 // app.js — keypad overlay, viewport-sync, calibration + long-press 0 -> +
-// Behavior preserved: invisible paste button (clipboard typing), initial 10s then 0.5s between chars.
-// Delete button remains invisible by default (still interactive).
+// Added: request persistent storage (iOS 17+), robust SW registration.
 
+// ---- Storage API: request persistent storage (best effort) ----
+(async () => {
+  if (navigator.storage && navigator.storage.persist) {
+    try {
+      // Optional: check current mode
+      if (navigator.storage.persisted) {
+        try {
+          const already = await navigator.storage.persisted();
+          console.debug('Storage persisted already:', already);
+        } catch (e) {}
+      }
+      const granted = await navigator.storage.persist();
+      console.debug('Persistent storage requested:', granted);
+    } catch (e) {
+      console.warn('Storage persist request failed', e);
+    }
+  }
+})();
+
+// ---- Service Worker registration with immediate activation/update ----
+(function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    const swUrl = new URL('service-worker.js', location.href).toString();
+    navigator.serviceWorker.register(swUrl, { scope: './' })
+      .then((reg) => {
+        // Force activate updated SWs quickly
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+        reg.addEventListener('updatefound', () => {
+          const sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', () => {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              try { sw.postMessage({ type: 'SKIP_WAITING' }); } catch (e) {}
+            }
+          });
+        });
+      })
+      .catch((err) => console.warn('SW register failed', err));
+
+    // When the new SW activates, reload to ensure it's controlling the page
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      // Avoid loops by reloading once
+      if (!window.__reloadedBySW) {
+        window.__reloadedBySW = true;
+        window.location.reload();
+      }
+    });
+  });
+})();
+
+// ---- Existing app code (unchanged from your file below) ----
 (() => {
   const displayEl = document.getElementById('display');
   const keysGrid = document.getElementById('keysGrid');
@@ -143,10 +196,9 @@
         const vb = svg.getAttribute('viewBox');
         if (vb) {
           const parts = vb.trim().split(/\s+/).map(Number);
-          if (parts.length === 4) { svgW = parts[2]; svgH = parts[3]; }
+          if (parts.length === 4) { svgW = parts[13]; svgH = parts[14]; }
         }
       }
-
       if (!svgW || !svgH) {
         try {
           const sbb = svg.getBBox();
@@ -154,7 +206,6 @@
           svgH = sbb.height || svgH;
         } catch (e) {}
       }
-
       if (!svgW) svgW = 100;
       if (!svgH) svgH = 100;
 
